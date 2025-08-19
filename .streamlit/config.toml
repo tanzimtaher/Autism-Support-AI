@@ -1,0 +1,6 @@
+# .streamlit/config.toml
+[theme]
+base="light"
+
+[server]
+runOnSave=true
