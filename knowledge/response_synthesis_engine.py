@@ -81,7 +81,7 @@ class ResponseSynthesisEngine:
                         "content": f"Please visit {url} and tell me: {query}"
                     }
                 ],
-                tools=[{"type": "web_search"}],
+                tools=[{"type": "function", "function": {"name": "web_search"}}],
                 max_tokens=1000
             )
             
