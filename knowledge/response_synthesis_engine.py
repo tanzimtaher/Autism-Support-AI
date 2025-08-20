@@ -68,29 +68,69 @@ class ResponseSynthesisEngine:
                 
             print(f"🌐 Browsing external source: {url}")
             
-            # Use OpenAI's web browsing capability
-            response = self.openai_client.chat.completions.create(
-                model="gpt-4o-mini",
-                messages=[
-                    {
-                        "role": "system", 
-                        "content": "You can browse the web. Visit the provided URL and extract relevant information about autism support and resources."
-                    },
-                    {
-                        "role": "user", 
-                        "content": f"Please visit {url} and tell me: {query}"
-                    }
-                ],
-                tools=[{"type": "function", "function": {"name": "web_search"}}],
-                max_tokens=1000
-            )
+            # Try the primary web browsing method first
+            try:
+                # Use OpenAI's web browsing capability (if available)
+                response = self.openai_client.chat.completions.create(
+                    model="gpt-4o-mini",
+                    messages=[
+                        {
+                            "role": "system", 
+                            "content": "You can browse the web. Visit the provided URL and extract relevant information about autism support and resources."
+                        },
+                        {
+                            "role": "user", 
+                            "content": f"Please visit {url} and tell me: {query}"
+                        }
+                    ],
+                    max_tokens=1000
+                )
+                
+                content = response.choices[0].message.content
+                if content and len(content.strip()) > 0:
+                    print(f"✅ Primary method retrieved {len(content)} characters from {url}")
+                    return content
+                    
+            except Exception as e:
+                print(f"⚠️ Primary web browsing method failed: {e}")
             
-            content = response.choices[0].message.content
-            print(f"✅ Retrieved {len(content)} characters from {url}")
-            return content
+            # Fallback to alternative method
+            return self._fallback_web_browsing(url, query)
             
         except Exception as e:
             print(f"❌ Web browsing error: {e}")
+            return self._fallback_web_browsing(url, query)
+    
+    def _fallback_web_browsing(self, url: str, query: str) -> Optional[str]:
+        """Fallback web browsing method using different approach."""
+        try:
+            print(f"🔄 Trying fallback web browsing for: {url}")
+            
+            # Use a different model that might have better web browsing
+            response = self.openai_client.chat.completions.create(
+                model="gpt-4o",
+                messages=[
+                    {
+                        "role": "system", 
+                        "content": "You are a helpful assistant that can access web content. When given a URL, you can browse it and provide information."
+                    },
+                    {
+                        "role": "user", 
+                        "content": f"Can you access {url} and tell me about: {query}? If you can't access it directly, provide general information about the topic."
+                    }
+                ],
+                max_tokens=800
+            )
+            
+            content = response.choices[0].message.content
+            if content and len(content.strip()) > 0:
+                print(f"✅ Fallback retrieved {len(content)} characters from {url}")
+                return content
+            else:
+                return None
+                
+        except Exception as e:
+            print(f"❌ Fallback web browsing also failed: {e}")
             return None
     
     def synthesize_response(
@@ -131,12 +171,19 @@ class ResponseSynthesisEngine:
         web_content = []
         for source in external_sources:
             if source and source.startswith("http"):
-                content = self.browse_external_source(source, user_query)
-                if content:
-                    web_content.append({
-                        "source": source,
-                        "content": content
-                    })
+                try:
+                    content = self.browse_external_source(source, user_query)
+                    if content and len(content.strip()) > 0:
+                        web_content.append({
+                            "source": source,
+                            "content": content
+                        })
+                        print(f"✅ Successfully browsed: {source}")
+                    else:
+                        print(f"⚠️ No content retrieved from: {source}")
+                except Exception as e:
+                    print(f"❌ Error browsing {source}: {e}")
+                    continue
         
         # Synthesize comprehensive response using LLM
         synthesized_response = self._llm_synthesize(
