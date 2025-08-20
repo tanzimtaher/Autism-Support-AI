@@ -23,28 +23,67 @@ with st.sidebar:
     age = st.slider("Child age", 0, 18, 6)
     st.session_state.profile_str = f"State:{state}, Income:{income}, ChildAge:{age}"
 
-# ---- knowledge tree selection
+# ---- Choose interaction mode
 st.title("Autism Support Assistant")
-st.subheader("Step 1: Select a support topic")
+st.subheader("How would you like to get help today?")
+
+interaction_mode = st.radio(
+    "Choose your preferred way to get support:",
+    [
+        "💬 Chat with me (I'll guide you through questions)",
+        "🔍 Browse specific topics directly"
+    ]
+)
+
+if interaction_mode == "💬 Chat with me (I'll guide you through questions)":
+    st.info("🎯 **Recommended for new users!** I'll ask you a few questions and guide you to the right information.")
+    st.markdown("""
+    **Benefits of chatting with me:**
+    - ✅ Personalized guidance based on your situation
+    - ✅ Step-by-step support through complex topics
+    - ✅ Safety monitoring for critical concerns
+    - ✅ Age and role-appropriate information
+    """)
+    
+    if st.button("🚀 Start Chat"):
+        st.switch_page("pages/conversational_ui.py")
+    
+    st.markdown("---")
+    st.markdown("**Or continue with the traditional topic browsing below:**")
+
+# ---- knowledge tree selection (traditional mode)
+st.subheader("Browse Topics Directly")
 
 diagnosed = st.radio("Has your child been diagnosed with autism?", ["Yes", "No"])
 base_path = "diagnosed_yes" if diagnosed == "Yes" else "diagnosed_no"
 
-topics = mongo.find({"context_path": {"$regex": f"^{base_path}"}})
-categories = sorted({doc["context_path"].split(" > ")[1] for doc in topics})
+# Get topics from new structure
+topics = mongo.find({"context_path": {"$regex": f"^{base_path}"}, "type": "content"})
+categories = sorted({doc["context_path"].split(".")[1] for doc in topics if len(doc["context_path"].split(".")) > 1})
 
-category = st.selectbox("Select a category", categories)
-
-subtopics = mongo.find({"context_path": {"$regex": f"^{base_path} > {category}"}})
-subkeys = sorted({">".join(doc["context_path"].split(" > ")[2:])
-                  for doc in subtopics if len(doc["context_path"].split(" > ")) > 2})
-subcategory = st.selectbox("Choose a specific topic", ["(none)"] + subkeys)
-
-# Final context path
-context_path = f"{base_path} > {category}"
-if subcategory and subcategory != "(none)":
-    context_path += f" > {subcategory}"
-st.session_state.context_path = context_path
+if categories:
+    category = st.selectbox("Select a category", categories)
+    
+    # Get subtopics
+    subtopics = mongo.find({"context_path": {"$regex": f"^{base_path}\\.{category}"}, "type": "content"})
+    subkeys = []
+    for doc in subtopics:
+        path_parts = doc["context_path"].split(".")
+        if len(path_parts) > 2:
+            subkeys.append(".".join(path_parts[2:]))
+    
+    subkeys = sorted(list(set(subkeys)))
+    subcategory = st.selectbox("Choose a specific topic", ["(none)"] + subkeys)
+    
+    # Final context path
+    context_path = f"{base_path}.{category}"
+    if subcategory and subcategory != "(none)":
+        context_path += f".{subcategory}"
+    st.session_state.context_path = context_path
+else:
+    st.warning("No topics found for this category. The knowledge base may need to be updated.")
+    context_path = base_path
+    st.session_state.context_path = context_path
 
 # ---- helper functions
 def fetch_mongo(path): 
