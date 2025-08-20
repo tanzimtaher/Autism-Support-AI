@@ -12,8 +12,8 @@ from pathlib import Path
 # Add parent directory to path for imports
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-# Import our guided conversation engine
-from knowledge.guided_conversation_engine import GuidedConversationEngine
+# Import our intelligent conversation manager
+from knowledge.intelligent_conversation_manager import IntelligentConversationManager
 
 # Page configuration
 st.set_page_config(
@@ -22,16 +22,16 @@ st.set_page_config(
     layout="wide"
 )
 
-# Initialize guided conversation engine
+# Initialize intelligent conversation manager
 @st.cache_resource
-def get_guided_engine():
-    return GuidedConversationEngine()
+def get_intelligent_manager():
+    return IntelligentConversationManager()
 
-engine = get_guided_engine()
+manager = get_intelligent_manager()
 
 def main():
-    st.title("🎯 Guided Autism Support")
-    st.markdown("I'll guide you through this step by step. Let me ask you a few questions to understand your situation and provide the most relevant help.")
+    st.title("🎯 Intelligent Autism Support")
+    st.markdown("I'll intelligently guide you through autism support using my knowledge base and real-time information. Let me ask you a few questions to understand your situation and provide the most relevant help.")
     
     # Initialize session state
     if "guided_conversation_id" not in st.session_state:
@@ -54,14 +54,15 @@ def main():
     with st.sidebar:
         st.markdown("### Guided Conversation Options")
         
-        if st.button("🔄 Start New Guided Session"):
+        if st.button("🔄 Start New Intelligent Session"):
             st.session_state.guided_conversation_id = None
             st.session_state.guided_chat_history = []
             st.session_state.user_profile = None
-            st.session_state.flow_progress = {}
+            st.session_state.current_context = None
+            st.session_state.available_paths = []
             st.rerun()
         
-        if st.button("📋 View Guided Summary"):
+        if st.button("📋 View Intelligent Summary"):
             if st.session_state.guided_conversation_id:
                 show_guided_summary()
         
@@ -123,67 +124,72 @@ def collect_user_profile():
         st.rerun()
 
 def start_guided_conversation():
-    """Start the guided conversation with the user profile."""
+    """Start the intelligent guided conversation with the user profile."""
     if not st.session_state.user_profile:
         return
     
-    # Get guided conversation start from engine
-    start_result = engine.start_guided_conversation(st.session_state.user_profile)
+    # Get intelligent conversation start from manager
+    start_result = manager.start_conversation(st.session_state.user_profile)
     
     # Initialize guided conversation state
     st.session_state.guided_conversation_id = start_result["conversation_id"]
-    st.session_state.flow_progress = {
-        "flow_name": start_result["flow_name"],
-        "current_step": start_result["current_step"],
-        "total_steps": start_result["total_steps"]
-    }
+    st.session_state.current_context = start_result["context_path"]
+    st.session_state.available_paths = start_result["available_paths"]
     
     # Add initial message to chat history
     st.session_state.guided_chat_history.append({
         "role": "assistant",
-        "content": start_result["message"],
-        "tone": start_result["tone"],
-        "step": start_result["current_step"],
-        "total_steps": start_result["total_steps"]
+        "content": start_result["response"],
+        "context_path": start_result["context_path"],
+        "next_suggestions": start_result["next_suggestions"]
     })
 
 def show_guided_conversation_interface():
-    """Show the guided conversation interface."""
+    """Show the intelligent guided conversation interface."""
     if not st.session_state.guided_conversation_id:
         st.error("Guided conversation not initialized. Please start over.")
         return
     
-    # Show flow progress
-    if st.session_state.flow_progress:
-        flow_name = st.session_state.flow_progress["flow_name"]
-        current_step = st.session_state.flow_progress["current_step"]
-        total_steps = st.session_state.flow_progress["total_steps"]
+    # Show current context and available paths
+    if st.session_state.get("current_context"):
+        st.subheader(f"🎯 Current Topic: {st.session_state.current_context}")
         
-        st.subheader(f"🎯 {flow_name}")
-        
-        # Progress bar
-        progress = current_step / total_steps
-        st.progress(progress)
-        st.caption(f"Step {current_step} of {total_steps}")
+        # Show available conversation paths
+        if st.session_state.get("available_paths"):
+            st.markdown("**🛤️ Available conversation paths:**")
+            cols = st.columns(3)
+            for i, path in enumerate(st.session_state.available_paths[:6]):  # Show up to 6 paths
+                col_idx = i % 3
+                with cols[col_idx]:
+                    if st.button(f"Explore: {path}", key=f"path_{path}"):
+                        # Navigate to selected path
+                        response_result = manager.process_user_response(
+                            f"Navigate to {path}", 
+                            selected_path=path
+                        )
+                        st.session_state.current_context = response_result["context_path"]
+                        st.session_state.available_paths = response_result["available_paths"]
+                        st.rerun()
     
-    # Display guided chat history
-    st.markdown("### Our Conversation")
+    # Display intelligent chat history
+    st.markdown("### 🤖 Our Intelligent Conversation")
     
     for message in st.session_state.guided_chat_history:
         if message["role"] == "assistant":
-            # Apply tone-based styling for guided conversation
-            tone = message.get("tone", "neutral")
-            if tone == "empathetic_guide":
-                st.success(f"**Guide:** {message['content']}")
-            elif tone == "supportive_summary":
-                st.info(f"**Guide:** {message['content']}")
-            else:
-                st.write(f"**Guide:** {message['content']}")
+            # Show AI response with context
+            st.success(f"**🤖 AI Assistant:** {message['content']}")
+            if message.get("context_path"):
+                st.caption(f"Context: {message['context_path']}")
+            if message.get("next_suggestions"):
+                st.markdown("**💡 Suggested next steps:**")
+                for suggestion in message["next_suggestions"][:3]:  # Show top 3
+                    st.markdown(f"- {suggestion}")
         else:
-            st.write(f"**You:** {message['content']}")
+            st.write(f"**👤 You:** {message['content']}")
+        st.write("---")
     
     # User input
-    user_input = st.chat_input("Type your response here...")
+    user_input = st.chat_input("Ask me anything about autism support...")
     
     if user_input:
         # Add user message to history
@@ -192,67 +198,52 @@ def show_guided_conversation_interface():
             "content": user_input
         })
         
-        # Process user input through guided engine
-        process_guided_input(user_input)
+        # Process user input through intelligent manager
+        process_intelligent_input(user_input)
         
         # Rerun to update the display
         st.rerun()
 
-def process_guided_input(user_input):
-    """Process user input through the guided conversation engine."""
+def process_intelligent_input(user_input):
+    """Process user input through the intelligent conversation manager."""
     if not st.session_state.guided_conversation_id:
         st.error("Guided conversation not initialized. Please start over.")
         return
     
-    # Process through guided conversation engine
-    response_result = engine.process_guided_response(
-        user_input, 
-        st.session_state.guided_conversation_id
-    )
-    
-    # Handle errors
-    if "error" in response_result:
-        st.error(response_result["error"])
-        return
+    # Process through intelligent conversation manager
+    response_result = manager.process_user_response(user_input)
     
     # Add response to chat history
     st.session_state.guided_chat_history.append({
         "role": "assistant",
-        "content": response_result["message"],
-        "tone": response_result["tone"],
-        "step": response_result.get("current_step", 1),
-        "total_steps": response_result.get("total_steps", 1)
+        "content": response_result["response"],
+        "context_path": response_result["context_path"],
+        "next_suggestions": response_result["next_suggestions"],
+        "confidence": response_result.get("confidence", 0.0),
+        "sources": response_result.get("sources", [])
     })
     
-    # Update flow progress
-    if "current_step" in response_result:
-        st.session_state.flow_progress["current_step"] = response_result["current_step"]
-    
-    # Handle flow completion
-    if response_result.get("flow_completed"):
-        st.session_state.flow_progress["completed"] = True
-        
-        # Show next actions if available
-        if "next_actions" in response_result:
-            st.session_state.next_actions = response_result["next_actions"]
+    # Update session state
+    st.session_state.current_context = response_result["context_path"]
+    st.session_state.available_paths = response_result["available_paths"]
 
 def show_guided_summary():
-    """Show a summary of the guided conversation."""
+    """Show a summary of the intelligent guided conversation."""
     if not st.session_state.guided_conversation_id:
         st.warning("No active guided conversation to summarize.")
         return
     
-    summary = engine.get_conversation_summary(st.session_state.guided_conversation_id)
+    summary = manager.get_conversation_summary()
     
-    st.subheader("📋 Guided Conversation Summary")
+    st.subheader("📋 Intelligent Conversation Summary")
     
     col1, col2 = st.columns(2)
     
     with col1:
-        st.markdown("**Conversation Flow:**")
-        st.write(f"• Flow: {summary['flow_name']}")
-        st.write(f"• Current Step: {summary['current_step']}")
-        st.write(f"• Steps Completed: {summary['steps_completed']}")
+        st.markdown("**Conversation Overview:**")
+        st.write(f"• Topics Discussed: {len(summary['topics_discussed'])}")
+        st.write(f"• Conversation Length: {summary['conversation_length']} messages")
+        st.write(f"• Final Context: {summary['final_context']}")
     
     with col2:
         st.markdown("**User Profile:**")
@@ -261,22 +252,23 @@ def show_guided_summary():
         st.write(f"• Diagnosis Status: {profile.get('diagnosis_status', 'unknown').replace('_', ' ').title()}")
         if profile.get('child_age'):
             st.write(f"• Child Age: {profile['child_age']}")
-        if profile.get('child_name'):
-            st.write(f"• Child Name: {profile['child_name']}")
     
-    # Show step history
-    if summary.get('step_history'):
-        st.markdown("**Conversation Steps:**")
-        for i, step in enumerate(summary['step_history'], 1):
-            st.write(f"**Step {i}:** {step['step_id']}")
-            st.write(f"Your response: {step['user_response'][:100]}...")
-            st.write("---")
+    # Show topics discussed
+    if summary.get('topics_discussed'):
+        st.markdown("**Topics Discussed:**")
+        for topic in summary['topics_discussed']:
+            st.write(f"• {topic}")
     
-    # Show extracted information
-    if summary.get('extracted_info'):
-        st.markdown("**Information Gathered:**")
-        for key, value in summary['extracted_info'].items():
-            st.write(f"• {key}: {value}")
+    # Show AI-generated summary
+    if summary.get('summary'):
+        st.markdown("**AI-Generated Summary:**")
+        st.info(summary['summary'])
+    
+    # Show next recommendations
+    if summary.get('next_recommendations'):
+        st.markdown("**Recommended Next Steps:**")
+        for rec in summary['next_recommendations']:
+            st.write(f"• {rec}")
 
 if __name__ == "__main__":
     main()
