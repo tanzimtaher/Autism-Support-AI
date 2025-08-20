@@ -60,6 +60,9 @@ class IntelligentConversationManager:
     def process_user_response(self, user_input: str, selected_path: str = None) -> Dict:
         """Process user input and generate intelligent response."""
         
+        # Extract and remember user-provided facts
+        self._extract_and_remember_facts(user_input)
+        
         # Add user input to history
         self.conversation_history.append({
             "role": "user",
@@ -137,21 +140,48 @@ class IntelligentConversationManager:
             
             available_paths = []
             
-            # Add routes
-            if content.get("routes"):
-                for route in content["routes"]:
+            # Handle routes (may be a dict with key-value pairs)
+            routes = content.get("routes") or content.get("interpretation_routes", {}).get("routes")
+            if isinstance(routes, dict):
+                for key, route in routes.items():
+                    # Use explicit path if provided; otherwise build a dotted path
+                    path = route.get("next_path") if isinstance(route, dict) else None
+                    if not path:
+                        path = f"{context_path}.routes.{key}"
+                    available_paths.append(path)
+            elif isinstance(routes, list):
+                # Handle legacy list format
+                for route in routes:
                     if isinstance(route, str):
                         available_paths.append(route)
                     elif isinstance(route, dict):
                         available_paths.append(route.get("next_path", ""))
             
-            # Add branches
-            if content.get("branches"):
-                for branch in content["branches"]:
+            # Handle branches (may be nested under specific conditions)
+            branches = content.get("branches") or content.get("no_dx_but_concerns", {}).get("branches")
+            if isinstance(branches, dict):
+                for key, branch in branches.items():
+                    # Use explicit path if provided; otherwise build a dotted path
+                    path = branch.get("path") if isinstance(branch, dict) else None
+                    if not path:
+                        path = f"{context_path}.branches.{key}"
+                    available_paths.append(path)
+            elif isinstance(branches, list):
+                # Handle legacy list format
+                for branch in branches:
                     if isinstance(branch, str):
                         available_paths.append(branch)
                     elif isinstance(branch, dict):
                         available_paths.append(branch.get("path", ""))
+            
+            # Also check for options
+            options = content.get("options")
+            if isinstance(options, dict):
+                for key, option in options.items():
+                    path = option.get("next_path") if isinstance(option, dict) else None
+                    if not path:
+                        path = f"{context_path}.options.{key}"
+                    available_paths.append(path)
             
             # Filter out empty paths
             available_paths = [path for path in available_paths if path]
@@ -260,6 +290,85 @@ class IntelligentConversationManager:
         """Generate a unique conversation ID."""
         import uuid
         return str(uuid.uuid4())[:8]
+    
+    def _extract_and_remember_facts(self, user_input: str):
+        """Extract and remember user-provided facts like age, diagnosis, etc."""
+        input_lower = user_input.lower()
+        
+        # Extract age information
+        import re
+        age_patterns = [
+            r'(?:he\'s|she\'s|child is|kid is|my child is)\s*(\d+)\s*(?:years?\s*old)?',
+            r'(\d+)\s*(?:year|yr)s?\s*old',
+            r'age\s*(?:is\s*)?(\d+)',
+            r'(\d+)\s*(?:years?\s*)?(?:old|of\s*age)'
+        ]
+        
+        for pattern in age_patterns:
+            match = re.search(pattern, input_lower)
+            if match:
+                age = int(match.group(1))
+                # Map age to age band
+                if age <= 3:
+                    age_band = "0-3"
+                elif age <= 5:
+                    age_band = "3-5"
+                elif age <= 12:
+                    age_band = "6-12"
+                elif age <= 17:
+                    age_band = "13-17"
+                else:
+                    age_band = "18+"
+                
+                if self.user_profile.get("child_age") != age_band:
+                    self.user_profile["child_age"] = age_band
+                    self.user_profile["specific_age"] = age
+                    print(f"✅ Remembered: Child age {age} (band: {age_band})")
+                break
+        
+        # Extract diagnosis status
+        if any(phrase in input_lower for phrase in ["diagnosed with autism", "has autism", "autism diagnosis", "confirmed autism"]):
+            if self.user_profile.get("diagnosis_status") != "diagnosed_yes":
+                self.user_profile["diagnosis_status"] = "diagnosed_yes"
+                print("✅ Remembered: Child has autism diagnosis")
+        
+        elif any(phrase in input_lower for phrase in ["not diagnosed", "no diagnosis", "haven't been diagnosed", "waiting for diagnosis"]):
+            if self.user_profile.get("diagnosis_status") != "diagnosed_no":
+                self.user_profile["diagnosis_status"] = "diagnosed_no"
+                print("✅ Remembered: Child not yet diagnosed")
+        
+        # Extract child name
+        name_patterns = [
+            r'(?:my\s+(?:son|daughter|child)\s+)(\w+)',
+            r'(?:his|her)\s+name\s+is\s+(\w+)',
+            r'(\w+)\s+(?:is\s+my\s+(?:son|daughter|child))',
+            r'(?:called|named)\s+(\w+)'
+        ]
+        
+        for pattern in name_patterns:
+            match = re.search(pattern, input_lower)
+            if match:
+                name = match.group(1).capitalize()
+                if self.user_profile.get("child_name") != name:
+                    self.user_profile["child_name"] = name
+                    print(f"✅ Remembered: Child's name is {name}")
+                break
+        
+        # Extract concerns
+        concern_keywords = {
+            "speech": ["speech", "talking", "speaking", "language", "words", "communication"],
+            "social": ["social", "friends", "playing", "interaction", "eye contact"],
+            "behavior": ["behavior", "meltdown", "tantrums", "repetitive", "stimming"],
+            "development": ["development", "milestones", "delayed", "behind"]
+        }
+        
+        for concern_type, keywords in concern_keywords.items():
+            if any(keyword in input_lower for keyword in keywords):
+                concerns = self.user_profile.get("concerns", [])
+                if concern_type not in concerns:
+                    concerns.append(concern_type)
+                    self.user_profile["concerns"] = concerns
+                    print(f"✅ Remembered: Concern about {concern_type}")
     
     def _get_timestamp(self) -> str:
         """Get current timestamp."""

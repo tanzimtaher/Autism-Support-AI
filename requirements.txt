@@ -1,0 +1,24 @@
+# Core dependencies
+streamlit
+openai
+pymongo
+
+# Web browsing dependencies
+requests
+beautifulsoup4
+
+# Data processing
+pandas
+numpy
+
+# Vector processing (for RAG)
+llama-index
+chromadb
+
+# File processing
+python-docx
+PyPDF2
+
+# Other utilities
+pathlib
+uuid

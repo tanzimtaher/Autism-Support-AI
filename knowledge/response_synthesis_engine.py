@@ -6,6 +6,8 @@ Combines MongoDB knowledge base content with real-time web browsing for comprehe
 import json
 import openai
 import streamlit as st
+import requests
+from bs4 import BeautifulSoup
 from typing import Dict, List, Optional, Tuple
 from pymongo import MongoClient
 from urllib.parse import urlparse
@@ -26,6 +28,22 @@ class ResponseSynthesisEngine:
         self.response_cache = {}
         self.web_content_cache = {}
         
+        # Define web browsing tool
+        self.web_fetch_tool = {
+            "type": "function",
+            "function": {
+                "name": "web_fetch",
+                "description": "Fetch a URL and return clean text content for autism support resources",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "url": {"type": "string", "description": "Absolute URL to fetch"}
+                    },
+                    "required": ["url"]
+                }
+            }
+        }
+        
     def _init_openai(self):
         """Initialize OpenAI client from Streamlit secrets."""
         try:
@@ -37,6 +55,40 @@ class ResponseSynthesisEngine:
                 print("⚠️ No OpenAI API key found - web browsing disabled")
         except Exception as e:
             print(f"❌ Error initializing OpenAI: {e}")
+    
+    def web_fetch(self, url: str) -> Dict:
+        """Fetch a URL and return clean text content."""
+        try:
+            # Keep it simple & safe
+            headers = {"User-Agent": "AutismSupportApp/1.0"}
+            r = requests.get(url, headers=headers, timeout=12)
+            r.raise_for_status()
+            
+            # Parse HTML and extract clean text
+            soup = BeautifulSoup(r.text, "html.parser")
+            
+            # Strip script/style and get text
+            for tag in soup(["script", "style", "noscript"]):
+                tag.decompose()
+            
+            text = " ".join(soup.get_text(separator=" ").split())
+            
+            # Return bounded payload
+            return {
+                "content": text[:20000],  # Limit to 20K chars
+                "status": r.status_code,
+                "url": url,
+                "success": True
+            }
+            
+        except Exception as e:
+            print(f"❌ Web fetch error for {url}: {e}")
+            return {
+                "content": f"Failed to fetch content from {url}: {str(e)}",
+                "status": 0,
+                "url": url,
+                "success": False
+            }
     
     def get_mongodb_content(self, context_path: str) -> Optional[Dict]:
         """Get content from MongoDB for a specific context path."""
@@ -56,7 +108,7 @@ class ResponseSynthesisEngine:
         return None
     
     def browse_external_source(self, url: str, query: str) -> Optional[str]:
-        """Browse external source using OpenAI's web browsing capability."""
+        """Browse external source using proper function tool and tool call loop."""
         if not self.openai_client or not url:
             return None
             
@@ -68,69 +120,84 @@ class ResponseSynthesisEngine:
                 
             print(f"🌐 Browsing external source: {url}")
             
-            # Try the primary web browsing method first
-            try:
-                # Use OpenAI's web browsing capability (if available)
-                response = self.openai_client.chat.completions.create(
-                    model="gpt-4o-mini",
-                    messages=[
-                        {
-                            "role": "system", 
-                            "content": "You can browse the web. Visit the provided URL and extract relevant information about autism support and resources."
-                        },
-                        {
-                            "role": "user", 
-                            "content": f"Please visit {url} and tell me: {query}"
-                        }
-                    ],
-                    max_tokens=1000
-                )
-                
-                content = response.choices[0].message.content
-                if content and len(content.strip()) > 0:
-                    print(f"✅ Primary method retrieved {len(content)} characters from {url}")
-                    return content
-                    
-            except Exception as e:
-                print(f"⚠️ Primary web browsing method failed: {e}")
+            # Use the tool call loop with proper function tool
+            messages = [
+                {
+                    "role": "system", 
+                    "content": "You can browse the web using the web_fetch function. Visit the provided URL and extract relevant information about autism support and resources."
+                },
+                {
+                    "role": "user", 
+                    "content": f"Please fetch content from {url} and tell me: {query}"
+                }
+            ]
             
-            # Fallback to alternative method
-            return self._fallback_web_browsing(url, query)
+            return self._run_with_tools(messages, max_tokens=1000)
             
         except Exception as e:
             print(f"❌ Web browsing error: {e}")
-            return self._fallback_web_browsing(url, query)
+            return None
     
-    def _fallback_web_browsing(self, url: str, query: str) -> Optional[str]:
-        """Fallback web browsing method using different approach."""
+    def _run_with_tools(self, messages: List[Dict], max_tokens: int = 1000) -> Optional[str]:
+        """Run OpenAI chat with tool call loop for web_fetch function."""
         try:
-            print(f"🔄 Trying fallback web browsing for: {url}")
-            
-            # Use a different model that might have better web browsing
+            # Initial request with tool
             response = self.openai_client.chat.completions.create(
-                model="gpt-4o",
-                messages=[
-                    {
-                        "role": "system", 
-                        "content": "You are a helpful assistant that can access web content. When given a URL, you can browse it and provide information."
-                    },
-                    {
-                        "role": "user", 
-                        "content": f"Can you access {url} and tell me about: {query}? If you can't access it directly, provide general information about the topic."
-                    }
-                ],
-                max_tokens=800
+                model="gpt-4o-mini",
+                messages=messages,
+                tools=[self.web_fetch_tool],
+                tool_choice="auto",
+                max_tokens=max_tokens
             )
             
+            # Handle function calls
+            while (response.choices[0].message.tool_calls and 
+                   len(response.choices[0].message.tool_calls) > 0):
+                
+                # Add assistant message with tool calls
+                messages.append({
+                    "role": "assistant",
+                    "content": response.choices[0].message.content,
+                    "tool_calls": response.choices[0].message.tool_calls
+                })
+                
+                # Process each tool call
+                for tool_call in response.choices[0].message.tool_calls:
+                    if tool_call.function.name == "web_fetch":
+                        # Parse arguments
+                        args = json.loads(tool_call.function.arguments)
+                        url = args.get("url", "")
+                        
+                        # Fetch web content
+                        result = self.web_fetch(url)
+                        
+                        # Add tool response
+                        messages.append({
+                            "role": "tool",
+                            "tool_call_id": tool_call.id,
+                            "name": "web_fetch",
+                            "content": json.dumps(result)
+                        })
+                        
+                        print(f"✅ Fetched {len(result['content'])} characters from {url}")
+                
+                # Continue conversation with tool results
+                response = self.openai_client.chat.completions.create(
+                    model="gpt-4o-mini",
+                    messages=messages,
+                    tools=[self.web_fetch_tool],
+                    max_tokens=max_tokens
+                )
+            
+            # Return final response content
             content = response.choices[0].message.content
             if content and len(content.strip()) > 0:
-                print(f"✅ Fallback retrieved {len(content)} characters from {url}")
                 return content
             else:
                 return None
                 
         except Exception as e:
-            print(f"❌ Fallback web browsing also failed: {e}")
+            print(f"❌ Tool call loop error: {e}")
             return None
     
     def synthesize_response(
