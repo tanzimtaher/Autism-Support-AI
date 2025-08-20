@@ -123,6 +123,68 @@ def build_enhanced_flat_structure() -> List[Dict]:
     
     return flat_docs
 
+def ingest_csv_to_mongo():
+    """
+    Ingest CSV data into MongoDB.
+    This function is called by the edit_csv.py UI to update MongoDB from CSV changes.
+    """
+    try:
+        import pandas as pd
+        
+        # Load CSV data
+        csv_path = os.path.join(DIR, "knowledge.csv")
+        if not os.path.exists(csv_path):
+            print(f"❌ CSV file not found: {csv_path}")
+            return False
+        
+        # Read CSV
+        df = pd.read_csv(csv_path)
+        print(f"📊 Loaded {len(df)} rows from CSV")
+        
+        # Clean data - remove rows without context_path or response
+        df = df.dropna(subset=["context_path", "response"])
+        print(f"🧹 Cleaned to {len(df)} valid rows")
+        
+        # Convert to MongoDB documents
+        mongo_docs = []
+        for _, row in df.iterrows():
+            doc = {
+                "context_path": row["context_path"],
+                "label": row.get("label", ""),
+                "response": row["response"],
+                "tone": row.get("tone", "neutral"),
+                "source": row.get("source", ""),
+                "type": "content"
+            }
+            mongo_docs.append(doc)
+        
+        # Connect to MongoDB
+        client = MongoClient(MONGO_URI)
+        db = client[DB_NAME]
+        collection = db[COLLECTION_NAME]
+        
+        # Clear existing content (but keep router config)
+        collection.delete_many({"type": "content"})
+        print("🗑️  Cleared existing content documents")
+        
+        # Insert new content
+        if mongo_docs:
+            result = collection.insert_many(mongo_docs)
+            print(f"✅ Inserted {len(result.inserted_ids)} content documents into MongoDB")
+        
+        # Create indexes
+        collection.create_index("context_path")
+        collection.create_index("type")
+        collection.create_index("tone")
+        
+        client.close()
+        print("🎉 CSV ingestion completed successfully!")
+        return True
+        
+    except Exception as e:
+        print(f"❌ Error ingesting CSV: {e}")
+        return False
+
 def ingest_to_mongo():
     """
     Ingest the new structure into MongoDB.
@@ -132,19 +194,19 @@ def ingest_to_mongo():
         flat_docs = build_enhanced_flat_structure()
         
         # Save to JSON file
-    with open(FLAT_JSON_PATH, "w", encoding="utf-8") as f:
+        with open(FLAT_JSON_PATH, "w", encoding="utf-8") as f:
             json.dump(flat_docs, f, indent=2, ensure_ascii=False)
         
         print(f"✅ Generated {len(flat_docs)} documents")
         print(f"📁 Saved to: {FLAT_JSON_PATH}")
 
-    # Upload to MongoDB
-    client = MongoClient(MONGO_URI)
-    db = client[DB_NAME]
-    collection = db[COLLECTION_NAME]
+        # Upload to MongoDB
+        client = MongoClient(MONGO_URI)
+        db = client[DB_NAME]
+        collection = db[COLLECTION_NAME]
         
         # Clear existing data
-    collection.delete_many({})
+        collection.delete_many({})
         print("🗑️  Cleared existing MongoDB collection")
         
         # Insert new data
@@ -190,6 +252,68 @@ def create_conversation_indexes():
         
     except Exception as e:
         print(f"❌ Error creating indexes: {e}")
+
+def ingest_csv_to_mongo():
+    """
+    Ingest CSV data into MongoDB.
+    This function is called by the edit_csv.py UI to update MongoDB from CSV changes.
+    """
+    try:
+        import pandas as pd
+        
+        # Load CSV data
+        csv_path = os.path.join(DIR, "knowledge.csv")
+        if not os.path.exists(csv_path):
+            print(f"❌ CSV file not found: {csv_path}")
+            return False
+        
+        # Read CSV
+        df = pd.read_csv(csv_path)
+        print(f"📊 Loaded {len(df)} rows from CSV")
+        
+        # Clean data - remove rows without context_path or response
+        df = df.dropna(subset=["context_path", "response"])
+        print(f"🧹 Cleaned to {len(df)} valid rows")
+        
+        # Convert to MongoDB documents
+        mongo_docs = []
+        for _, row in df.iterrows():
+            doc = {
+                "context_path": row["context_path"],
+                "label": row.get("label", ""),
+                "response": row["response"],
+                "tone": row.get("tone", "neutral"),
+                "source": row.get("source", ""),
+                "type": "content"
+            }
+            mongo_docs.append(doc)
+        
+        # Connect to MongoDB
+        client = MongoClient(MONGO_URI)
+        db = client[DB_NAME]
+        collection = db[COLLECTION_NAME]
+        
+        # Clear existing content (but keep router config)
+        collection.delete_many({"type": "content"})
+        print("🗑️  Cleared existing content documents")
+        
+        # Insert new content
+        if mongo_docs:
+            result = collection.insert_many(mongo_docs)
+            print(f"✅ Inserted {len(result.inserted_ids)} content documents into MongoDB")
+        
+        # Create indexes
+        collection.create_index("context_path")
+        collection.create_index("type")
+        collection.create_index("tone")
+        
+        client.close()
+        print("🎉 CSV ingestion completed successfully!")
+        return True
+        
+    except Exception as e:
+        print(f"❌ Error ingesting CSV: {e}")
+        return False
 
 if __name__ == "__main__":
     print("🚀 Starting new knowledge base ingestion...")
