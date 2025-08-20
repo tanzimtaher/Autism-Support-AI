@@ -533,6 +533,11 @@ class EmpatheticConversationEngine:
                         response = entry["response"]
                         follow_up = f"Great! Since {child_name} has a diagnosis, what type of support are you looking for most urgently - therapy, school help, or something else?"
                         return f"{response}\n\n{follow_up}"
+                    else:
+                        # Fallback for diagnosed children
+                        response = f"I'm so glad {child_name} has received a diagnosis - this opens up many doors for support and services. Since {child_name} is {child_age}, there are several types of interventions that can be very helpful."
+                        follow_up = f"What's your biggest priority right now - finding therapy services, getting school support, understanding the diagnosis better, or something else?"
+                        return f"{response}\n\n{follow_up}"
                 else:
                     entry = self.router.get_knowledge_entry("diagnosed_no.at_home_resources")
                     if entry and "response" in entry:
@@ -605,7 +610,7 @@ class EmpatheticConversationEngine:
         
         elif intent == "needs_resources":
             if profile.get("diagnosis_status") == "diagnosed_yes":
-                return f"Great! Since {child_name} has a diagnosis, there are several types of support available. What type of help are you looking for most urgently - therapy services, school support, or financial assistance?"
+                return f"I'm so glad {child_name} has received a diagnosis - this opens up many doors for support and services. Since {child_name} is {child_age}, there are several types of interventions that can be very helpful. What's your biggest priority right now - finding therapy services, getting school support, understanding the diagnosis better, or something else?"
             else:
                 return f"Even while you're exploring evaluation options, there are helpful resources you can use. What's your biggest worry right now? I can help you find resources that address your specific concerns."
         

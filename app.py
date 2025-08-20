@@ -30,22 +30,39 @@ st.subheader("How would you like to get help today?")
 interaction_mode = st.radio(
     "Choose your preferred way to get support:",
     [
-        "💬 Chat with me (I'll guide you through questions)",
+        "🎯 Guided Step-by-Step (I'll lead the conversation)",
+        "💬 Free Chat (Ask me anything)",
         "🔍 Browse specific topics directly"
     ]
 )
 
-if interaction_mode == "💬 Chat with me (I'll guide you through questions)":
-    st.info("🎯 **Recommended for new users!** I'll ask you a few questions and guide you to the right information.")
+if interaction_mode == "🎯 Guided Step-by-Step (I'll lead the conversation)":
+    st.success("🎯 **Best for new users!** I'll take the lead and guide you through a structured conversation to understand your needs.")
     st.markdown("""
-    **Benefits of chatting with me:**
-    - ✅ Personalized guidance based on your situation
-    - ✅ Step-by-step support through complex topics
-    - ✅ Safety monitoring for critical concerns
-    - ✅ Age and role-appropriate information
+    **Benefits of guided conversation:**
+    - ✅ **I ask the questions** - No need to figure out what to ask
+    - ✅ **Step-by-step process** - Clear progression through your concerns
+    - ✅ **Personalized guidance** - Tailored to your specific situation
+    - ✅ **Comprehensive assessment** - Ensures we cover all important areas
+    - ✅ **Actionable next steps** - Clear recommendations at the end
     """)
     
-    if st.button("🚀 Start Chat"):
+    if st.button("🚀 Start Guided Session"):
+        st.switch_page("pages/guided_conversation_ui.py")
+    
+    st.markdown("---")
+
+elif interaction_mode == "💬 Free Chat (Ask me anything)":
+    st.info("💬 **For experienced users!** Ask me any questions and I'll help you find the information you need.")
+    st.markdown("""
+    **Benefits of free chat:**
+    - ✅ Ask specific questions
+    - ✅ Explore topics at your own pace
+    - ✅ Get detailed answers to complex questions
+    - ✅ Flexible conversation flow
+    """)
+    
+    if st.button("💬 Start Free Chat"):
         st.switch_page("pages/conversational_ui.py")
     
     st.markdown("---")

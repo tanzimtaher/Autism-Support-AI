@@ -239,22 +239,38 @@ def show_conversation_summary():
     col1, col2 = st.columns(2)
     
     with col1:
-        st.markdown("**User Profile:**")
-        st.write(f"• Role: {summary['role'].replace('_', ' ').title()}")
-        st.write(f"• Diagnosis Status: {summary['diagnosis_status'].replace('_', ' ').title()}")
-        if summary['role'] == 'parent_caregiver':
-            st.write(f"• Child Age: {summary['child_age']}")
-            if summary.get('child_name') and summary['child_name'] != "Not specified":
-                st.write(f"• Child Name: {summary['child_name']}")
+        st.markdown("**Family Information:**")
+        family_info = summary.get('family_information', {})
+        st.write(f"• Parent Name: {family_info.get('parent_name', 'Not specified')}")
+        st.write(f"• Role: {family_info.get('role', 'unknown').replace('_', ' ').title()}")
+        st.write(f"• Child Name: {family_info.get('child_name', 'Not specified')}")
+        st.write(f"• Child Age: {family_info.get('child_age', 'unknown')}")
+        st.write(f"• Child Gender: {family_info.get('child_gender', 'Not specified')}")
+        st.write(f"• Diagnosis Status: {family_info.get('diagnosis_status', 'unknown').replace('_', ' ').title()}")
     
     with col2:
         st.markdown("**Progress:**")
-        st.write(f"• Current Step: {summary['current_step'].replace('_', ' ').title()}")
-        st.write(f"• Completed Steps: {len(summary['completed_steps'])}")
+        progress_info = summary.get('conversation_progress', {})
+        st.write(f"• Current Step: {progress_info.get('current_step', 'Entry Point')}")
+        st.write(f"• Completed Steps: {len(progress_info.get('completed_steps', []))}")
+        st.write(f"• Conversation Length: {progress_info.get('conversation_length', 0)} messages")
     
     st.markdown("**Next Recommendations:**")
-    for rec in summary.get("next_recommendations", []):
+    recommendations = summary.get("recommendations", {})
+    for rec in recommendations.get("next_steps", []):
         st.write(f"• {rec}")
+    
+    # Show specific details if available
+    specific_details = summary.get("specific_details", {})
+    if specific_details.get("concerns_mentioned"):
+        st.markdown("**Concerns Mentioned:**")
+        for concern in specific_details["concerns_mentioned"]:
+            st.write(f"• {concern}")
+    
+    if specific_details.get("challenges_strengths"):
+        st.markdown("**Challenges & Strengths:**")
+        for item in specific_details["challenges_strengths"]:
+            st.write(f"• {item}")
     
     # Export conversation option
     if st.button("📥 Export Conversation"):
@@ -290,15 +306,15 @@ def export_conversation(summary):
     story.append(Paragraph("User Profile", styles['Heading2']))
     story.append(Spacer(1, 12))
     
+    family_info = summary.get('family_information', {})
     profile_data = [
-        ['Role', summary['role'].replace('_', ' ').title()],
-        ['Diagnosis Status', summary['diagnosis_status'].replace('_', ' ').title()],
+        ['Parent Name', family_info.get('parent_name', 'Not specified')],
+        ['Role', family_info.get('role', 'unknown').replace('_', ' ').title()],
+        ['Child Name', family_info.get('child_name', 'Not specified')],
+        ['Child Age', family_info.get('child_age', 'unknown')],
+        ['Child Gender', family_info.get('child_gender', 'Not specified')],
+        ['Diagnosis Status', family_info.get('diagnosis_status', 'unknown').replace('_', ' ').title()],
     ]
-    
-    if summary['role'] == 'parent_caregiver':
-        profile_data.append(['Child Age', summary['child_age']])
-        if summary.get('child_name') and summary['child_name'] != "Not specified":
-            profile_data.append(['Child Name', summary['child_name']])
     
     profile_table = Table(profile_data, colWidths=[2*inch, 4*inch])
     profile_table.setStyle(TableStyle([
@@ -318,10 +334,11 @@ def export_conversation(summary):
     story.append(Paragraph("Progress", styles['Heading2']))
     story.append(Spacer(1, 12))
     
+    progress_info = summary.get('conversation_progress', {})
     progress_data = [
-        ['Current Step', summary['current_step'].replace('_', ' ').title()],
-        ['Completed Steps', str(len(summary['completed_steps']))],
-        ['Conversation Length', str(summary['conversation_length'])]
+        ['Current Step', progress_info.get('current_step', 'Entry Point')],
+        ['Completed Steps', str(len(progress_info.get('completed_steps', [])))],
+        ['Conversation Length', str(progress_info.get('conversation_length', 0))]
     ]
     
     progress_table = Table(progress_data, colWidths=[2*inch, 4*inch])

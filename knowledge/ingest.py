@@ -132,19 +132,19 @@ def ingest_to_mongo():
         flat_docs = build_enhanced_flat_structure()
         
         # Save to JSON file
-        with open(FLAT_JSON_PATH, "w", encoding="utf-8") as f:
+    with open(FLAT_JSON_PATH, "w", encoding="utf-8") as f:
             json.dump(flat_docs, f, indent=2, ensure_ascii=False)
         
         print(f"✅ Generated {len(flat_docs)} documents")
         print(f"📁 Saved to: {FLAT_JSON_PATH}")
-        
-        # Upload to MongoDB
-        client = MongoClient(MONGO_URI)
-        db = client[DB_NAME]
-        collection = db[COLLECTION_NAME]
+
+    # Upload to MongoDB
+    client = MongoClient(MONGO_URI)
+    db = client[DB_NAME]
+    collection = db[COLLECTION_NAME]
         
         # Clear existing data
-        collection.delete_many({})
+    collection.delete_many({})
         print("🗑️  Cleared existing MongoDB collection")
         
         # Insert new data
