@@ -108,7 +108,7 @@ class ResponseSynthesisEngine:
         return None
     
     def browse_external_source(self, url: str, query: str) -> Optional[str]:
-        """Browse external source using proper function tool and tool call loop."""
+        """Browse external source using OpenAI native web search with custom scraping fallback."""
         if not self.openai_client or not url:
             return None
             
@@ -120,84 +120,57 @@ class ResponseSynthesisEngine:
                 
             print(f"🌐 Browsing external source: {url}")
             
-            # Use the tool call loop with proper function tool
-            messages = [
-                {
-                    "role": "system", 
-                    "content": "You can browse the web using the web_fetch function. Visit the provided URL and extract relevant information about autism support and resources."
-                },
-                {
-                    "role": "user", 
-                    "content": f"Please fetch content from {url} and tell me: {query}"
-                }
-            ]
+            # Try OpenAI native web search first (PRIMARY METHOD)
+            try:
+                print("🔍 Trying OpenAI native web search...")
+                response = self.openai_client.chat.completions.create(
+                    model="gpt-4o-search-preview",  # Native web search model
+                    web_search_options={},  # Enable web search
+                    messages=[
+                        {
+                            "role": "user",
+                            "content": f"Search for information about: {query}. Focus on autism support, screening, and resources."
+                        }
+                    ],
+                    max_tokens=1000
+                )
+                
+                content = response.choices[0].message.content
+                if content and len(content.strip()) > 0:
+                    print(f"✅ OpenAI native web search: {len(content)} characters")
+                    print(f"   First 100 chars: {content[:100]}...")
+                    return content
+                else:
+                    print("⚠️ OpenAI native web search returned empty content")
+                    
+            except Exception as e:
+                print(f"⚠️ OpenAI native web search failed: {e}")
             
-            return self._run_with_tools(messages, max_tokens=1000)
+            # Fallback to our custom web scraping (FALLBACK METHOD)
+            print("🔄 Falling back to custom web scraping...")
+            return self._custom_web_scraping(url, query)
             
         except Exception as e:
             print(f"❌ Web browsing error: {e}")
             return None
     
-    def _run_with_tools(self, messages: List[Dict], max_tokens: int = 1000) -> Optional[str]:
-        """Run OpenAI chat with tool call loop for web_fetch function."""
+    def _custom_web_scraping(self, url: str, query: str) -> Optional[str]:
+        """Custom web scraping fallback using requests and BeautifulSoup."""
         try:
-            # Initial request with tool
-            response = self.openai_client.chat.completions.create(
-                model="gpt-4o-mini",
-                messages=messages,
-                tools=[self.web_fetch_tool],
-                tool_choice="auto",
-                max_tokens=max_tokens
-            )
+            print(f"🔄 Custom web scraping for: {url}")
             
-            # Handle function calls
-            while (response.choices[0].message.tool_calls and 
-                   len(response.choices[0].message.tool_calls) > 0):
-                
-                # Add assistant message with tool calls
-                messages.append({
-                    "role": "assistant",
-                    "content": response.choices[0].message.content,
-                    "tool_calls": response.choices[0].message.tool_calls
-                })
-                
-                # Process each tool call
-                for tool_call in response.choices[0].message.tool_calls:
-                    if tool_call.function.name == "web_fetch":
-                        # Parse arguments
-                        args = json.loads(tool_call.function.arguments)
-                        url = args.get("url", "")
-                        
-                        # Fetch web content
-                        result = self.web_fetch(url)
-                        
-                        # Add tool response
-                        messages.append({
-                            "role": "tool",
-                            "tool_call_id": tool_call.id,
-                            "name": "web_fetch",
-                            "content": json.dumps(result)
-                        })
-                        
-                        print(f"✅ Fetched {len(result['content'])} characters from {url}")
-                
-                # Continue conversation with tool results
-                response = self.openai_client.chat.completions.create(
-                    model="gpt-4o-mini",
-                    messages=messages,
-                    tools=[self.web_fetch_tool],
-                    max_tokens=max_tokens
-                )
+            # Use our existing web_fetch function
+            result = self.web_fetch(url)
             
-            # Return final response content
-            content = response.choices[0].message.content
-            if content and len(content.strip()) > 0:
-                return content
+            if result.get("success") and result.get("content"):
+                print(f"✅ Custom scraping: {len(result['content'])} characters")
+                return result["content"]
             else:
+                print(f"⚠️ Custom scraping failed: {result.get('content', 'Unknown error')}")
                 return None
                 
         except Exception as e:
-            print(f"❌ Tool call loop error: {e}")
+            print(f"❌ Custom web scraping error: {e}")
             return None
     
     def synthesize_response(
@@ -390,6 +363,85 @@ Please synthesize a comprehensive, empathetic response that directly addresses t
             "response_tone": mongodb_content.get("tone", "supportive"),
             "has_external_sources": bool(mongodb_content.get("source"))
         }
+    
+    def test_web_browsing_methods(self, query: str = "autism screening guidelines") -> Dict:
+        """Test both web browsing methods to compare performance."""
+        print("🧪 Testing Web Browsing Methods")
+        print("=" * 40)
+        
+        results = {}
+        
+        # Test OpenAI native web search
+        try:
+            print("\n🔍 Testing OpenAI Native Web Search...")
+            response = self.openai_client.chat.completions.create(
+                model="gpt-4o-search-preview",
+                web_search_options={},
+                messages=[{
+                    "role": "user",
+                    "content": f"Search for information about: {query}"
+                }],
+                max_tokens=1000
+            )
+            
+            content = response.choices[0].message.content
+            if content:
+                results["openai_native"] = {
+                    "success": True,
+                    "content_length": len(content),
+                    "content_preview": content[:200] + "...",
+                    "method": "OpenAI Native Web Search"
+                }
+                print(f"✅ OpenAI native: {len(content)} characters")
+            else:
+                results["openai_native"] = {
+                    "success": False,
+                    "error": "Empty content returned"
+                }
+                print("❌ OpenAI native: Empty content")
+                
+        except Exception as e:
+            results["openai_native"] = {
+                "success": False,
+                "error": str(e)
+            }
+            print(f"❌ OpenAI native failed: {e}")
+        
+        # Test custom web scraping with a known working URL
+        try:
+            print("\n🔄 Testing Custom Web Scraping...")
+            test_url = "https://www.cdc.gov/ncbddd/actearly/screening.html"
+            result = self.web_fetch(test_url)
+            
+            if result.get("success") and result.get("content"):
+                results["custom_scraping"] = {
+                    "success": True,
+                    "content_length": len(result["content"]),
+                    "content_preview": result["content"][:200] + "...",
+                    "method": "Custom Web Scraping",
+                    "url": test_url
+                }
+                print(f"✅ Custom scraping: {len(result['content'])} characters")
+            else:
+                results["custom_scraping"] = {
+                    "success": False,
+                    "error": result.get("content", "Unknown error")
+                }
+                print(f"❌ Custom scraping failed: {result.get('content', 'Unknown error')}")
+                
+        except Exception as e:
+            results["custom_scraping"] = {
+                "success": False,
+                "error": str(e)
+            }
+            print(f"❌ Custom scraping error: {e}")
+        
+        # Summary
+        print(f"\n📊 Test Results Summary:")
+        print(f"   OpenAI Native: {'✅' if results.get('openai_native', {}).get('success') else '❌'}")
+        print(f"   Custom Scraping: {'✅' if results.get('custom_scraping', {}).get('success') else '❌'}")
+        
+        return results
     
     def close(self):
         """Close the MongoDB connection."""
