@@ -14,6 +14,7 @@ numpy
 # Vector processing (for RAG)
 llama-index
 chromadb
+qdrant-client
 
 # File processing
 python-docx

@@ -1,6 +1,6 @@
 """
 Conversational UI for Autism Support App
-Provides a conversational interface instead of form-based navigation.
+Provides a conversational interface using the new dual-index system.
 """
 
 import streamlit as st
@@ -12,8 +12,8 @@ from pathlib import Path
 # Add parent directory to path for imports
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-# Import our conversation engine
-from knowledge.empathetic_conversation_engine import EmpatheticConversationEngine
+# Import our new conversation manager
+from knowledge.intelligent_conversation_manager import IntelligentConversationManager
 
 # Page configuration
 st.set_page_config(
@@ -22,12 +22,12 @@ st.set_page_config(
     layout="wide"
 )
 
-# Initialize conversation engine
+# Initialize conversation manager
 @st.cache_resource
-def get_conversation_engine():
-    return EmpatheticConversationEngine()
+def get_conversation_manager():
+    return IntelligentConversationManager()
 
-engine = get_conversation_engine()
+manager = get_conversation_manager()
 
 def main():
     st.title("💬 Autism Support Assistant")
@@ -128,18 +128,21 @@ def start_conversation():
     if not st.session_state.user_profile:
         return
     
-    # Get conversation start from engine
-    start_result = engine.start_conversation(st.session_state.user_profile)
+    # Get conversation start from manager
+    start_result = manager.start_conversation(st.session_state.user_profile)
     
-    # Initialize conversation state - now we store the conversation_id
+    # Initialize conversation state - store the conversation_id and context
     st.session_state.conversation_id = start_result["conversation_id"]
-    st.session_state.conversation_state = start_result["conversation_state"]
+    st.session_state.conversation_state = {
+        "context_path": start_result["context_path"],
+        "available_paths": start_result["available_paths"]
+    }
     
     # Add initial message to chat history
     st.session_state.chat_history.append({
         "role": "assistant",
-        "content": start_result["message"],
-        "tone": start_result["tone"]
+        "content": start_result["response"],
+        "context_path": start_result["context_path"]
     })
     
     # No more conversation starters - just empathetic questions
@@ -190,11 +193,8 @@ def process_user_input(user_input):
         st.error("Conversation not initialized. Please start over.")
         return
     
-    # Process through conversation engine
-    response_result = engine.process_user_input(
-        user_input, 
-        st.session_state.conversation_id
-    )
+    # Process through conversation manager
+    response_result = manager.process_user_response(user_input)
     
     # Handle errors
     if "error" in response_result:
@@ -204,25 +204,29 @@ def process_user_input(user_input):
     # Add response to chat history
     st.session_state.chat_history.append({
         "role": "assistant",
-        "content": response_result["message"],
-        "tone": response_result["tone"]
+        "content": response_result["response"],
+        "context_path": response_result["context_path"]
     })
     
-    # Show safety alert if present
-    if response_result.get("safety_alert"):
-        st.error("🚨 **SAFETY ALERT** 🚨")
-        if response_result.get("immediate_actions"):
-            for action in response_result["immediate_actions"]:
-                st.error(f"• {action}")
+    # Update conversation state
+    st.session_state.conversation_state = {
+        "context_path": response_result["context_path"],
+        "available_paths": response_result["available_paths"]
+    }
     
-    # Show helpful resources if available
-    if response_result.get("helpful_resources"):
-        resources_text = "**Helpful Resources:**\n"
-        for resource in response_result["helpful_resources"]:
-            resources_text += f"• **{resource['name']}**: {resource['description']}\n"
+    # Show safety alert if present
+    if response_result.get("safety_warning"):
+        st.error("🚨 **SAFETY ALERT** 🚨")
+        st.error(response_result["safety_warning"])
+    
+    # Show next suggestions if available
+    if response_result.get("next_suggestions"):
+        suggestions_text = "**Next Steps:**\n"
+        for suggestion in response_result["next_suggestions"][:3]:
+            suggestions_text += f"• {suggestion}\n"
         st.session_state.chat_history.append({
             "role": "assistant",
-            "content": resources_text,
+            "content": suggestions_text,
             "tone": "informative"
         })
 
@@ -232,175 +236,74 @@ def show_conversation_summary():
         st.warning("No active conversation to summarize.")
         return
     
-    summary = engine.get_conversation_summary(st.session_state.conversation_id)
+    summary = manager.get_conversation_summary()
     
     st.subheader("📋 Conversation Summary")
     
     col1, col2 = st.columns(2)
     
     with col1:
-        st.markdown("**Family Information:**")
-        family_info = summary.get('family_information', {})
-        st.write(f"• Parent Name: {family_info.get('parent_name', 'Not specified')}")
-        st.write(f"• Role: {family_info.get('role', 'unknown').replace('_', ' ').title()}")
-        st.write(f"• Child Name: {family_info.get('child_name', 'Not specified')}")
-        st.write(f"• Child Age: {family_info.get('child_age', 'unknown')}")
-        st.write(f"• Child Gender: {family_info.get('child_gender', 'Not specified')}")
-        st.write(f"• Diagnosis Status: {family_info.get('diagnosis_status', 'unknown').replace('_', ' ').title()}")
+        st.markdown("**User Profile:**")
+        user_profile = summary.get('user_profile', {})
+        st.write(f"• Role: {user_profile.get('role', 'unknown').replace('_', ' ').title()}")
+        st.write(f"• Child Age: {user_profile.get('child_age', 'unknown')}")
+        st.write(f"• Diagnosis Status: {user_profile.get('diagnosis_status', 'unknown').replace('_', ' ').title()}")
+        if user_profile.get('child_name'):
+            st.write(f"• Child Name: {user_profile['child_name']}")
+        if user_profile.get('concerns'):
+            st.write(f"• Concerns: {', '.join(user_profile['concerns'])}")
     
     with col2:
         st.markdown("**Progress:**")
-        progress_info = summary.get('conversation_progress', {})
-        st.write(f"• Current Step: {progress_info.get('current_step', 'Entry Point')}")
-        st.write(f"• Completed Steps: {len(progress_info.get('completed_steps', []))}")
-        st.write(f"• Conversation Length: {progress_info.get('conversation_length', 0)} messages")
+        st.write(f"• Current Context: {summary.get('final_context', 'Entry Point')}")
+        st.write(f"• Topics Discussed: {len(summary.get('topics_discussed', []))}")
+        st.write(f"• Conversation Length: {summary.get('conversation_length', 0)} messages")
     
     st.markdown("**Next Recommendations:**")
-    recommendations = summary.get("recommendations", {})
-    for rec in recommendations.get("next_steps", []):
-        st.write(f"• {rec}")
+    recommendations = summary.get("next_recommendations", [])
+    if recommendations:
+        for rec in recommendations:
+            st.write(f"• {rec}")
+    else:
+        st.write("• Continue with current conversation flow")
     
-    # Show specific details if available
-    specific_details = summary.get("specific_details", {})
-    if specific_details.get("concerns_mentioned"):
-        st.markdown("**Concerns Mentioned:**")
-        for concern in specific_details["concerns_mentioned"]:
-            st.write(f"• {concern}")
-    
-    if specific_details.get("challenges_strengths"):
-        st.markdown("**Challenges & Strengths:**")
-        for item in specific_details["challenges_strengths"]:
-            st.write(f"• {item}")
+    # Show topics discussed
+    topics = summary.get("topics_discussed", [])
+    if topics:
+        st.markdown("**Topics Discussed:**")
+        for topic in topics:
+            st.write(f"• {topic}")
     
     # Export conversation option
     if st.button("📥 Export Conversation"):
         export_conversation(summary)
 
 def export_conversation(summary):
-    """Export conversation summary and history as PDF."""
-    import io
-    from reportlab.lib.pagesizes import letter
-    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
-    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-    from reportlab.lib.units import inch
-    from reportlab.lib import colors
-    
-    # Create PDF buffer
-    buffer = io.BytesIO()
-    doc = SimpleDocTemplate(buffer, pagesize=letter)
-    styles = getSampleStyleSheet()
-    story = []
-    
-    # Title
-    title_style = ParagraphStyle(
-        'CustomTitle',
-        parent=styles['Heading1'],
-        fontSize=16,
-        spaceAfter=30,
-        alignment=1  # Center alignment
-    )
-    story.append(Paragraph("Autism Support Conversation Summary", title_style))
-    story.append(Spacer(1, 20))
-    
-    # User Profile Section
-    story.append(Paragraph("User Profile", styles['Heading2']))
-    story.append(Spacer(1, 12))
-    
-    family_info = summary.get('family_information', {})
-    profile_data = [
-        ['Parent Name', family_info.get('parent_name', 'Not specified')],
-        ['Role', family_info.get('role', 'unknown').replace('_', ' ').title()],
-        ['Child Name', family_info.get('child_name', 'Not specified')],
-        ['Child Age', family_info.get('child_age', 'unknown')],
-        ['Child Gender', family_info.get('child_gender', 'Not specified')],
-        ['Diagnosis Status', family_info.get('diagnosis_status', 'unknown').replace('_', ' ').title()],
-    ]
-    
-    profile_table = Table(profile_data, colWidths=[2*inch, 4*inch])
-    profile_table.setStyle(TableStyle([
-        ('BACKGROUND', (0, 0), (-1, 0), colors.grey),
-        ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
-        ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
-        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-        ('FONTSIZE', (0, 0), (-1, 0), 12),
-        ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
-        ('BACKGROUND', (0, 1), (-1, -1), colors.beige),
-        ('GRID', (0, 0), (-1, -1), 1, colors.black)
-    ]))
-    story.append(profile_table)
-    story.append(Spacer(1, 20))
-    
-    # Progress Section
-    story.append(Paragraph("Progress", styles['Heading2']))
-    story.append(Spacer(1, 12))
-    
-    progress_info = summary.get('conversation_progress', {})
-    progress_data = [
-        ['Current Step', progress_info.get('current_step', 'Entry Point')],
-        ['Completed Steps', str(len(progress_info.get('completed_steps', [])))],
-        ['Conversation Length', str(progress_info.get('conversation_length', 0))]
-    ]
-    
-    progress_table = Table(progress_data, colWidths=[2*inch, 4*inch])
-    progress_table.setStyle(TableStyle([
-        ('BACKGROUND', (0, 0), (-1, 0), colors.grey),
-        ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
-        ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
-        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-        ('FONTSIZE', (0, 0), (-1, 0), 12),
-        ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
-        ('BACKGROUND', (0, 1), (-1, -1), colors.beige),
-        ('GRID', (0, 0), (-1, -1), 1, colors.black)
-    ]))
-    story.append(progress_table)
-    story.append(Spacer(1, 20))
-    
-    # Chat History Section
-    story.append(Paragraph("Chat History", styles['Heading2']))
-    story.append(Spacer(1, 12))
-    
-    for i, message in enumerate(st.session_state.chat_history):
-        role = "You" if message["role"] == "user" else "Assistant"
-        content = message["content"]
-        
-        # Truncate long messages for PDF
-        if len(content) > 200:
-            content = content[:200] + "..."
-        
-        story.append(Paragraph(f"<b>{role}:</b>", styles['Normal']))
-        story.append(Paragraph(content, styles['Normal']))
-        story.append(Spacer(1, 8))
-    
-    # Build PDF
-    doc.build(story)
-    buffer.seek(0)
-    
-    # Create download button for PDF
-    st.download_button(
-        label="📥 Download Conversation as PDF",
-        data=buffer.getvalue(),
-        file_name="autism_support_conversation.pdf",
-        mime="application/pdf",
-        key="download_pdf"
-    )
-    
-    # Also provide JSON option
+    """Export conversation summary and history as JSON."""
+    # Create export data
     export_data = {
         "summary": summary,
         "chat_history": st.session_state.chat_history,
-        "timestamp": str(st.session_state.get("conversation_state", {}).get("timestamp", ""))
+        "user_profile": st.session_state.user_profile,
+        "conversation_id": st.session_state.conversation_id,
+        "timestamp": str(st.session_state.get("conversation_state", {}).get("context_path", ""))
     }
     
+    # Export as JSON
     json_str = json.dumps(export_data, indent=2)
     st.download_button(
-        label="📄 Download as JSON",
+        label="📄 Download Conversation as JSON",
         data=json_str,
         file_name="autism_support_conversation.json",
         mime="application/json",
         key="download_json"
     )
     
-    st.success("Export options ready! Choose PDF or JSON format.")
+    st.success("✅ Export ready! Download the JSON file to save your conversation.")
+    
+    # Show a preview of what's being exported
+    with st.expander("📋 Export Preview"):
+        st.json(export_data)
 
 def browse_topics_directly():
     """Navigate back to the main app for topic browsing."""
@@ -411,8 +314,8 @@ def browse_topics_directly():
     st.session_state.user_profile = None
     st.session_state.conversation_mode = False
     
-    # Navigate back to main app - use st.experimental_rerun instead of switch_page
-    st.experimental_rerun()
+    # Navigate back to main app
+    st.rerun()
 
 if __name__ == "__main__":
     main()

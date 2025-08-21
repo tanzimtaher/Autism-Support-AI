@@ -8,11 +8,19 @@ from typing import Dict, List, Optional, Tuple
 from .response_synthesis_engine import ResponseSynthesisEngine
 from .context_traversal_engine import ContextTraversalEngine
 
+# Add new imports for dual-index system
+from app.services.knowledge_adapter import KnowledgeAdapter
+from retrieval.retrieval_router import RetrievalRouter
+
 class IntelligentConversationManager:
     def __init__(self, mongo_uri: str = "mongodb://localhost:27017/"):
         """Initialize the intelligent conversation manager."""
         self.response_engine = ResponseSynthesisEngine(mongo_uri)
         self.context_engine = ContextTraversalEngine(mongo_uri)
+        
+        # Add new dual-index components
+        self.knowledge_adapter = KnowledgeAdapter()
+        self.retrieval_router = RetrievalRouter(self.knowledge_adapter)
         
         # Conversation state
         self.current_context_path = None
@@ -20,25 +28,29 @@ class IntelligentConversationManager:
         self.user_profile = {}
         self.available_paths = []
         
+        # Generate user ID if not exists
+        if "user_id" not in self.user_profile:
+            import uuid
+            self.user_profile["user_id"] = str(uuid.uuid4())[:8]
+        
     def start_conversation(self, user_profile: Dict) -> Dict:
         """Start a new intelligent conversation based on user profile."""
-        self.user_profile = user_profile
+        self.user_profile.update(user_profile)
         self.conversation_history = []
         
-        # Determine initial context path
-        initial_path = self.context_engine.determine_initial_context(user_profile)
+        # Use knowledge adapter for initial context
+        initial_path = self.knowledge_adapter.get_initial_context(self.user_profile)
         self.current_context_path = initial_path
         
         # Get initial response using synthesis engine
         initial_response = self.response_engine.synthesize_response(
             user_query="Start conversation",
             context_path=initial_path,
-            user_profile=user_profile
+            user_profile=self.user_profile
         )
         
-        # Get available conversation paths
-        flow_info = self.response_engine.get_conversation_flow(initial_path)
-        self.available_paths = self._get_available_paths(initial_path)
+        # Get available conversation paths using knowledge adapter
+        self.available_paths = self.knowledge_adapter.get_available_paths(initial_path)
         
         # Add to conversation history
         self.conversation_history.append({
@@ -70,6 +82,19 @@ class IntelligentConversationManager:
             "timestamp": self._get_timestamp()
         })
         
+        # Check for safety terms first
+        safety_warning = self.retrieval_router.get_safety_warning(user_input)
+        if safety_warning:
+            return {
+                "response": safety_warning,
+                "context_path": self.current_context_path,
+                "next_suggestions": [],
+                "available_paths": self.available_paths,
+                "confidence": 1.0,
+                "sources": [],
+                "safety_warning": True
+            }
+        
         # Determine next context path
         if selected_path:
             next_context = selected_path
@@ -79,16 +104,35 @@ class IntelligentConversationManager:
         # Update current context
         self.current_context_path = next_context
         
-        # Generate synthesized response
-        response = self.response_engine.synthesize_response(
-            user_query=user_input,
-            context_path=next_context,
-            user_profile=self.user_profile,
-            conversation_history=self.conversation_history
+        # Use retrieval router to decide knowledge source
+        mode, vector_results = self.retrieval_router.route(
+            user_input, 
+            self.user_profile, 
+            next_context
         )
         
+        # Generate response based on routing mode
+        if mode == "mongo_only":
+            # Use only structured MongoDB data
+            response = self.response_engine.synthesize_response(
+                user_query=user_input,
+                context_path=next_context,
+                user_profile=self.user_profile,
+                conversation_history=self.conversation_history
+            )
+        elif mode == "blend":
+            # Combine MongoDB + vector search
+            response = self._synthesize_blended_response(
+                user_input, next_context, vector_results
+            )
+        else:  # vector_only
+            # Use vector search with guided hints
+            response = self._synthesize_vector_response(
+                user_input, next_context, vector_results
+            )
+        
         # Update available paths
-        self.available_paths = self._get_available_paths(next_context)
+        self.available_paths = self.knowledge_adapter.get_available_paths(next_context)
         
         # Add response to history
         self.conversation_history.append({
@@ -105,9 +149,67 @@ class IntelligentConversationManager:
             "context_path": next_context,
             "next_suggestions": response["next_suggestions"],
             "available_paths": self.available_paths,
-            "confidence": response["confidence"],
-            "sources": response["sources"]
+            "confidence": response.get("confidence", 0.8),
+            "sources": response["sources"],
+            "mode": mode
         }
+    
+    def _synthesize_blended_response(self, user_input: str, context_path: str, vector_results: List) -> Dict:
+        """Synthesize response combining MongoDB structure with vector search."""
+        # Get MongoDB content
+        mongo_content = self.response_engine.get_mongodb_content(context_path)
+        
+        # Create enhanced context by modifying the user input to include vector results
+        enhanced_input = f"""
+        {user_input}
+        
+        Additional Context from Vector Search:
+        {self._format_vector_results(vector_results)}
+        """
+        
+        # Generate enhanced response using the existing API
+        return self.response_engine.synthesize_response(
+            user_query=enhanced_input,
+            context_path=context_path,
+            user_profile=self.user_profile,
+            conversation_history=self.conversation_history
+        )
+    
+    def _synthesize_vector_response(self, user_input: str, context_path: str, vector_results: List) -> Dict:
+        """Synthesize response using vector search with guided hints."""
+        # Get guided hint from current context
+        guided_hint = self.retrieval_router.get_guided_hint(context_path)
+        
+        # Create enhanced input combining vector results with guided hint
+        enhanced_input = f"""
+        {user_input}
+        
+        Vector Search Results:
+        {self._format_vector_results(vector_results)}
+        
+        Guided Hint: {guided_hint.get('label', 'Continue')}
+        Next Steps: {', '.join(guided_hint.get('next_steps', []))}
+        """
+        
+        # Generate response using the existing API
+        return self.response_engine.synthesize_response(
+            user_query=enhanced_input,
+            context_path=context_path,
+            user_profile=self.user_profile,
+            conversation_history=self.conversation_history
+        )
+    
+    def _format_vector_results(self, vector_results: List) -> str:
+        """Format vector search results for LLM context."""
+        if not vector_results:
+            return "No additional context found."
+        
+        formatted = []
+        for i, result in enumerate(vector_results[:3], 1):
+            payload = result.get("payload", {})
+            formatted.append(f"{i}. {payload.get('label', 'Unknown')}: {payload.get('response', '')[:200]}...")
+        
+        return "\n".join(formatted)
     
     def _determine_next_context(self, user_input: str) -> str:
         """Intelligently determine the next context based on user input."""
@@ -117,8 +219,8 @@ class IntelligentConversationManager:
             if path.lower() in user_input.lower():
                 return path
         
-        # Use context engine to find best match
-        best_match = self.context_engine.get_context_path_content(self.current_context_path)
+        # Use knowledge adapter to find best match
+        best_match = self.knowledge_adapter.get_node(self.current_context_path)
         if best_match and best_match.get("routes"):
             # Check routes for relevance
             for route in best_match["routes"]:
@@ -131,66 +233,8 @@ class IntelligentConversationManager:
         return self.current_context_path
     
     def _get_available_paths(self, context_path: str) -> List[str]:
-        """Get available conversation paths from current context."""
-        try:
-            # Get MongoDB content for current context
-            content = self.response_engine.get_mongodb_content(context_path)
-            if not content:
-                return []
-            
-            available_paths = []
-            
-            # Handle routes (may be a dict with key-value pairs)
-            routes = content.get("routes") or content.get("interpretation_routes", {}).get("routes")
-            if isinstance(routes, dict):
-                for key, route in routes.items():
-                    # Use explicit path if provided; otherwise build a dotted path
-                    path = route.get("next_path") if isinstance(route, dict) else None
-                    if not path:
-                        path = f"{context_path}.routes.{key}"
-                    available_paths.append(path)
-            elif isinstance(routes, list):
-                # Handle legacy list format
-                for route in routes:
-                    if isinstance(route, str):
-                        available_paths.append(route)
-                    elif isinstance(route, dict):
-                        available_paths.append(route.get("next_path", ""))
-            
-            # Handle branches (may be nested under specific conditions)
-            branches = content.get("branches") or content.get("no_dx_but_concerns", {}).get("branches")
-            if isinstance(branches, dict):
-                for key, branch in branches.items():
-                    # Use explicit path if provided; otherwise build a dotted path
-                    path = branch.get("path") if isinstance(branch, dict) else None
-                    if not path:
-                        path = f"{context_path}.branches.{key}"
-                    available_paths.append(path)
-            elif isinstance(branches, list):
-                # Handle legacy list format
-                for branch in branches:
-                    if isinstance(branch, str):
-                        available_paths.append(branch)
-                    elif isinstance(branch, dict):
-                        available_paths.append(branch.get("path", ""))
-            
-            # Also check for options
-            options = content.get("options")
-            if isinstance(options, dict):
-                for key, option in options.items():
-                    path = option.get("next_path") if isinstance(option, dict) else None
-                    if not path:
-                        path = f"{context_path}.options.{key}"
-                    available_paths.append(path)
-            
-            # Filter out empty paths
-            available_paths = [path for path in available_paths if path]
-            
-            return available_paths
-            
-        except Exception as e:
-            print(f"❌ Error getting available paths: {e}")
-            return []
+        """Get available conversation paths using knowledge adapter."""
+        return self.knowledge_adapter.get_available_paths(context_path)
     
     def get_conversation_summary(self) -> Dict:
         """Generate a comprehensive conversation summary."""
@@ -239,8 +283,8 @@ class IntelligentConversationManager:
         if not self.current_context_path:
             return []
         
-        # Get current context content
-        content = self.response_engine.get_mongodb_content(self.current_context_path)
+        # Get current context content using knowledge adapter
+        content = self.knowledge_adapter.get_node(self.current_context_path)
         if not content:
             return []
         
@@ -404,6 +448,7 @@ if __name__ == "__main__":
     print(f"\nUser Response: {user_response}")
     print(f"AI Response: {response_result['response'][:200]}...")
     print(f"Next Context: {response_result['context_path']}")
+    print(f"Mode: {response_result.get('mode', 'unknown')}")
     
     # Get suggestions
     suggestions = manager.suggest_next_topics()
