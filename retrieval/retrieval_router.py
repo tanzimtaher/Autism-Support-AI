@@ -71,8 +71,29 @@ class RetrievalRouter:
             # 2. Search user's private documents (if user has documents)
             if user_id != "public":
                 from rag.ingest_user_docs import search_user_documents
-                user_results = search_user_documents(user_id, query, limit // 2)
-                all_results.extend(user_results)
+                try:
+                    user_results = search_user_documents(user_id, query, limit // 2)
+                    if user_results:
+                        print(f"✅ Found {len(user_results)} user document results")
+                        all_results.extend(user_results)
+                    else:
+                        print(f"⚠️ No user document results found for user {user_id}")
+                except Exception as e:
+                    print(f"❌ Error searching user documents: {e}")
+                    # Try alternative search method
+                    try:
+                        from rag.qdrant_client import search_with_user_filter
+                        user_results = search_with_user_filter(
+                            collection_name=f"user_docs_{user_id}",
+                            query_vector=query_vector,
+                            user_id=user_id,
+                            k=limit // 2
+                        )
+                        if user_results:
+                            print(f"✅ Found {len(user_results)} user document results (alternative method)")
+                            all_results.extend(user_results)
+                    except Exception as e2:
+                        print(f"❌ Alternative user document search also failed: {e2}")
             
             # Sort by score and limit
             all_results.sort(key=lambda x: x.get("score", 0), reverse=True)

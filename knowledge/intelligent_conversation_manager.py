@@ -28,6 +28,14 @@ class IntelligentConversationManager:
         self.user_profile = {}
         self.available_paths = []
         
+        # Conversation memory for context continuity
+        self.conversation_memory = {
+            "patient_info": {},
+            "discussed_topics": set(),
+            "user_concerns": [],
+            "recommendations_given": []
+        }
+        
         # Generate user ID if not exists
         if "user_id" not in self.user_profile:
             self.user_profile["user_id"] = "default"
@@ -134,6 +142,9 @@ class IntelligentConversationManager:
             # Update available paths
             self.available_paths = self.knowledge_adapter.get_available_paths(next_context)
             
+            # Update conversation memory
+            self._update_conversation_memory(user_input, response)
+            
             # Add response to history
             self.conversation_history.append({
                 "role": "assistant",
@@ -175,12 +186,26 @@ class IntelligentConversationManager:
         # Get MongoDB content
         mongo_content = self.response_engine.get_mongodb_content(context_path)
         
-        # Create enhanced context by modifying the user input to include vector results
+        # Separate user documents from general knowledge
+        user_doc_results = []
+        general_results = []
+        
+        for result in vector_results:
+            payload = result.get("payload", {})
+            if payload.get("source") == "user_upload" or payload.get("type") == "user_document":
+                user_doc_results.append(result)
+            else:
+                general_results.append(result)
+        
+        # Create enhanced context with user documents prioritized
         enhanced_input = f"""
         {user_input}
         
-        Additional Context from Vector Search:
-        {self._format_vector_results(vector_results)}
+        User's Patient Documents Context:
+        {self._format_user_document_results(user_doc_results)}
+        
+        Additional Knowledge Base Context:
+        {self._format_vector_results(general_results)}
         """
         
         # Generate enhanced response using the existing API
@@ -214,6 +239,21 @@ class IntelligentConversationManager:
             user_profile=self.user_profile,
             conversation_history=self.conversation_history
         )
+    
+
+    def _format_user_document_results(self, user_doc_results: List) -> str:
+        """Format user document results for LLM context."""
+        if not user_doc_results:
+            return "No patient-specific documents found."
+        
+        formatted = []
+        for i, result in enumerate(user_doc_results[:3], 1):
+            payload = result.get("payload", {})
+            filename = payload.get("filename", "Unknown file")
+            content = payload.get("content", "")[:300]
+            formatted.append(f"{i}. {filename}: {content}...")
+        
+        return "\n".join(formatted)
     
     def _format_vector_results(self, vector_results: List) -> str:
         """Format vector search results for LLM context."""
@@ -350,6 +390,52 @@ class IntelligentConversationManager:
         """Generate a unique conversation ID."""
         import uuid
         return str(uuid.uuid4())[:8]
+    
+
+    def _update_conversation_memory(self, user_input: str, response: Dict):
+        """Update conversation memory with new information."""
+        # Extract patient information
+        if "child" in user_input.lower() or "son" in user_input.lower() or "daughter" in user_input.lower():
+            # Extract age, name, diagnosis info
+            import re
+            age_match = re.search(r'(\d+)\s*(?:year|yr)s?\s*old', user_input.lower())
+            if age_match:
+                self.conversation_memory["patient_info"]["age"] = age_match.group(1)
+            
+            name_match = re.search(r'(?:my\s+(?:son|daughter|child)\s+)(\w+)', user_input.lower())
+            if name_match:
+                self.conversation_memory["patient_info"]["name"] = name_match.group(1).capitalize()
+        
+        # Track discussed topics
+        if response.get("context_path"):
+            self.conversation_memory["discussed_topics"].add(response["context_path"])
+        
+        # Track user concerns
+        concern_keywords = ["worried", "concerned", "struggling", "difficulty", "problem"]
+        if any(keyword in user_input.lower() for keyword in concern_keywords):
+            self.conversation_memory["user_concerns"].append(user_input)
+        
+        # Track recommendations
+        if response.get("next_suggestions"):
+            self.conversation_memory["recommendations_given"].extend(response["next_suggestions"])
+    
+    def _get_conversation_context(self) -> str:
+        """Get conversation context for LLM synthesis."""
+        context_parts = []
+        
+        if self.conversation_memory["patient_info"]:
+            patient_info = ", ".join([f"{k}: {v}" for k, v in self.conversation_memory["patient_info"].items()])
+            context_parts.append(f"Patient Information: {patient_info}")
+        
+        if self.conversation_memory["discussed_topics"]:
+            topics = ", ".join(list(self.conversation_memory["discussed_topics"])[:5])
+            context_parts.append(f"Previously Discussed: {topics}")
+        
+        if self.conversation_memory["user_concerns"]:
+            concerns = "; ".join(self.conversation_memory["user_concerns"][-3:])
+            context_parts.append(f"User Concerns: {concerns}")
+        
+        return "\n".join(context_parts) if context_parts else "No previous context available."
     
     def _extract_and_remember_facts(self, user_input: str):
         """Extract and remember user-provided facts like age, diagnosis, etc."""

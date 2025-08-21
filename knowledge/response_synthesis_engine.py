@@ -287,6 +287,16 @@ class ResponseSynthesisEngine:
             profile_context = f"User Profile: {user_profile.get('role', 'parent')}, Child Age: {user_profile.get('child_age', 'unknown')}, Diagnosis Status: {user_profile.get('diagnosis_status', 'unknown')}"
             context_parts.append(profile_context)
             
+            # Add conversation history context for continuity
+            if conversation_history:
+                recent_history = conversation_history[-3:]  # Last 3 exchanges
+                history_context = "Recent Conversation History:\n"
+                for msg in recent_history:
+                    role = "User" if msg.get("role") == "user" else "Assistant"
+                    content = msg.get("content", "")[:100] + "..." if len(msg.get("content", "")) > 100 else msg.get("content", "")
+                    history_context += f"{role}: {content}\n"
+                context_parts.append(history_context)
+            
             # Combine all context
             full_context = "\n\n".join(context_parts)
             

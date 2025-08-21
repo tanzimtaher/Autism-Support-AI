@@ -421,6 +421,9 @@ def show_unified_conversation_interface():
         if st.button("🔧 Check System Status"):
             check_system_status()
         
+        if st.button("🧪 Test RAG Functionality"):
+            test_rag_functionality()
+        
     # Topic browsing option
     st.markdown("---")
     st.markdown("### 🔍 Browse Topics")
@@ -1467,6 +1470,63 @@ def check_system_status():
     user_id = ensure_consistent_user_id()
     vector_docs = get_vector_store_documents(user_id)
     st.info(f"📄 User Documents: {len(vector_docs)} documents found")
+
+
+def test_rag_functionality():
+    """Test RAG functionality to debug issues."""
+    st.subheader("🧪 RAG Functionality Test")
+    
+    # Test user document search
+    user_id = ensure_consistent_user_id()
+    st.write(f"**Testing User ID:** {user_id}")
+    
+    # Test vector store documents
+    vector_docs = get_vector_store_documents(user_id)
+    st.write(f"**Vector Store Documents:** {len(vector_docs)}")
+    
+    if vector_docs:
+        st.write("**Available Documents:**")
+        for doc in vector_docs:
+            st.write(f"• {doc['filename']} ({doc['chunks']} chunks)")
+    
+    # Test RAG search
+    test_query = st.text_input("Test Query:", value="autism diagnosis")
+    
+    if st.button("🔍 Test RAG Search"):
+        try:
+            from rag.ingest_user_docs import search_user_documents
+            from retrieval.retrieval_router import RetrievalRouter
+            from app.services.knowledge_adapter import KnowledgeAdapter
+            
+            # Test user document search
+            user_results = search_user_documents(user_id, test_query, 3)
+            st.write(f"**User Document Results:** {len(user_results)}")
+            
+            for i, result in enumerate(user_results, 1):
+                payload = result.get("payload", {})
+                st.write(f"{i}. {payload.get('filename', 'Unknown')} - Score: {result.get('score', 0):.3f}")
+                st.write(f"   Content: {payload.get('content', '')[:100]}...")
+            
+            # Test retrieval router
+            ka = KnowledgeAdapter()
+            router = RetrievalRouter(ka)
+            test_profile = {"user_id": user_id, "diagnosis_status": "diagnosed_yes"}
+            mode, results = router.route(test_query, test_profile, "diagnosed_yes.support_affording")
+            
+            st.write(f"**Router Mode:** {mode}")
+            st.write(f"**Total Results:** {len(results)}")
+            
+            # Show results by source
+            user_docs = [r for r in results if r.get("payload", {}).get("source") == "user_upload"]
+            shared_docs = [r for r in results if r.get("payload", {}).get("source") != "user_upload"]
+            
+            st.write(f"**User Documents:** {len(user_docs)}")
+            st.write(f"**Shared Knowledge:** {len(shared_docs)}")
+            
+        except Exception as e:
+            st.error(f"RAG test failed: {e}")
+            import traceback
+            st.code(traceback.format_exc())
 
 # ---- session state
 if "chat_history" not in st.session_state:
