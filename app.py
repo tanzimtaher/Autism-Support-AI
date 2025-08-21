@@ -811,12 +811,15 @@ def start_topic_conversation(context_path):
     st.session_state.browse_selections = {}
 
 def show_conversation_summary():
-    """Show a summary of the current conversation."""
+    """Show an improved conversation summary."""
     if not hasattr(st.session_state, 'conversation_id') or not st.session_state.conversation_id:
         st.warning("No active conversation to summarize.")
         return
     
     summary = manager.get_conversation_summary()
+    
+    # Improve the summary display
+    improved_summary = improve_conversation_summary_display(summary)
     
     st.subheader("📋 Conversation Summary")
     
@@ -824,31 +827,28 @@ def show_conversation_summary():
     
     with col1:
         st.markdown("**User Profile:**")
-        user_profile = summary.get('user_profile', {})
-        st.write(f"• Role: {user_profile.get('role', 'unknown').replace('_', ' ').title()}")
-        st.write(f"• Child Age: {user_profile.get('child_age', 'unknown')}")
-        st.write(f"• Diagnosis Status: {user_profile.get('diagnosis_status', 'unknown').replace('_', ' ').title()}")
-        if user_profile.get('child_name'):
+        user_profile = improved_summary['user_profile']
+        st.write(f"• Role: {user_profile['role']}")
+        st.write(f"• Child Age: {user_profile['child_age']}")
+        st.write(f"• Diagnosis Status: {user_profile['diagnosis_status']}")
+        if user_profile['child_name'] != 'Not specified':
             st.write(f"• Child Name: {user_profile['child_name']}")
-        if user_profile.get('concerns'):
-            st.write(f"• Concerns: {', '.join(user_profile['concerns'])}")
+        st.write(f"• Concerns: {user_profile['concerns']}")
     
     with col2:
         st.markdown("**Progress:**")
-        st.write(f"• Current Context: {summary.get('final_context', 'Entry Point')}")
-        st.write(f"• Topics Discussed: {len(summary.get('topics_discussed', []))}")
-        st.write(f"• Conversation Length: {summary.get('conversation_length', 0)} messages")
+        progress = improved_summary['progress']
+        st.write(f"• Current Context: {progress['current_context']}")
+        st.write(f"• Topics Discussed: {progress['topics_discussed_count']}")
+        st.write(f"• Conversation Length: {progress['conversation_length']} messages")
     
     st.markdown("**Next Recommendations:**")
-    recommendations = summary.get("next_recommendations", [])
-    if recommendations:
-        for rec in recommendations:
-            st.write(f"• {rec}")
-    else:
-        st.write("• Continue with current conversation flow")
+    recommendations = improved_summary['recommendations']
+    for rec in recommendations:
+        st.write(f"• {rec}")
     
-    # Show topics discussed
-    topics = summary.get("topics_discussed", [])
+    # Show topics discussed with user-friendly labels
+    topics = improved_summary['topics_discussed']
     if topics:
         st.markdown("**Topics Discussed:**")
         for topic in topics:
@@ -1035,6 +1035,290 @@ def clear_user_documents():
         
     except Exception as e:
         st.error(f"❌ Error clearing documents: {e}")
+
+
+def get_user_friendly_context_label(context_path):
+    """Convert technical context paths to user-friendly labels."""
+    if not context_path:
+        return "Getting Started"
+    
+    # Comprehensive mapping of technical paths to user-friendly labels
+    context_labels = {
+        # Main entry points
+        "diagnosed_no.entry_point": "Getting Started - No Diagnosis",
+        "diagnosed_yes.entry_point": "Getting Started - With Diagnosis",
+        
+        # Screening and monitoring
+        "diagnosed_no.monitor_vs_screen": "Monitoring vs Screening",
+        "diagnosed_no.screening_options": "Screening Options",
+        "diagnosed_no.interpretation_routes": "Understanding Screening Results",
+        
+        # Not yet evaluated paths
+        "diagnosed_no.not_yet_evaluated": "Not Yet Evaluated",
+        "diagnosed_no.no_dx_but_concerns": "Concerns Without Diagnosis",
+        "diagnosed_no.at_home_resources": "At-Home Resources",
+        
+        # Legal and emergency
+        "diagnosed_no.legal_emergency_intro": "Legal & Emergency Support",
+        "diagnosed_yes.legal_and_emergency": "Legal & Emergency Support",
+        
+        # Support and resources
+        "diagnosed_yes.support_affording": "Affording Support",
+        "diagnosed_yes.find_resources": "Finding Resources",
+        
+        # Specific topics
+        "required_docs": "Required Documents",
+        "screening_tools": "Screening Tools",
+        "developmental_milestones": "Developmental Milestones",
+        "red_flags": "Red Flags to Watch For",
+        "next_steps": "Next Steps",
+        "resources": "Resources & Support",
+        "legal_rights": "Legal Rights",
+        "emergency_contacts": "Emergency Contacts",
+        
+        # Default fallbacks
+        "conversation_summary": "Conversation Summary",
+        "Entry Point": "Getting Started"
+    }
+    
+    # Try exact match first
+    if context_path in context_labels:
+        return context_labels[context_path]
+    
+    # Try partial matches for nested paths
+    for key, label in context_labels.items():
+        if context_path.startswith(key):
+            return label
+    
+    # Fallback: convert underscores to spaces and title case
+    return context_path.replace("_", " ").title()
+
+def improve_conversation_summary_display(summary):
+    """Improve the conversation summary display with better formatting and logic."""
+    
+    # Fix user profile display
+    user_profile = summary.get('user_profile', {})
+    
+    # Clean up diagnosis status
+    diagnosis_status = user_profile.get('diagnosis_status', 'unknown')
+    if diagnosis_status == 'diagnosed_yes':
+        diagnosis_display = "Diagnosed"
+    elif diagnosis_status == 'diagnosed_no':
+        diagnosis_display = "Not Diagnosed"
+    else:
+        diagnosis_display = diagnosis_status.replace('_', ' ').title()
+    
+    # Clean up child name (fix "Has" issue)
+    child_name = user_profile.get('child_name', '')
+    if child_name and child_name.lower() in ['has', 'yes', 'no', 'unknown']:
+        child_name = 'Not specified'
+    
+    # Clean up role
+    role = user_profile.get('role', 'unknown')
+    if role == 'parent_caregiver':
+        role_display = "Parent/Caregiver"
+    else:
+        role_display = role.replace('_', ' ').title()
+    
+    # Clean up concerns
+    concerns = user_profile.get('concerns', [])
+    if isinstance(concerns, str):
+        concerns = [concerns]
+    concerns_display = ', '.join(concerns) if concerns else 'Not specified'
+    
+    # Get user-friendly context label
+    context_path = summary.get('final_context', 'Entry Point')
+    context_label = get_user_friendly_context_label(context_path)
+    
+    # Generate better recommendations
+    recommendations = summary.get("next_recommendations", [])
+    if not recommendations or len(recommendations) == 0:
+        # Generate contextual recommendations based on user profile and context
+        if diagnosis_status == 'diagnosed_no':
+            recommendations = [
+                "Schedule a developmental screening",
+                "Learn about early intervention services",
+                "Connect with local support groups"
+            ]
+        elif diagnosis_status == 'diagnosed_yes':
+            recommendations = [
+                "Explore treatment and therapy options",
+                "Find local autism support resources",
+                "Learn about educational rights and IEPs"
+            ]
+        else:
+            recommendations = [
+                "Continue exploring autism support topics",
+                "Consider speaking with a healthcare provider",
+                "Learn more about developmental milestones"
+            ]
+    
+    # Clean up topics discussed
+    topics = summary.get("topics_discussed", [])
+    topic_labels = []
+    for topic in topics:
+        topic_label = get_user_friendly_context_label(topic)
+        topic_labels.append(topic_label)
+    
+    return {
+        'user_profile': {
+            'role': role_display,
+            'child_age': user_profile.get('child_age', 'Not specified'),
+            'diagnosis_status': diagnosis_display,
+            'child_name': child_name,
+            'concerns': concerns_display
+        },
+        'progress': {
+            'current_context': context_label,
+            'topics_discussed_count': len(topics),
+            'conversation_length': summary.get('conversation_length', 0)
+        },
+        'recommendations': recommendations,
+        'topics_discussed': topic_labels
+    }
+
+
+
+def get_user_friendly_context_label(context_path):
+    """Convert technical context paths to user-friendly labels."""
+    if not context_path:
+        return "Getting Started"
+    
+    # Comprehensive mapping of technical paths to user-friendly labels
+    context_labels = {
+        # Main entry points
+        "diagnosed_no.entry_point": "Getting Started - No Diagnosis",
+        "diagnosed_yes.entry_point": "Getting Started - With Diagnosis",
+        
+        # Screening and monitoring
+        "diagnosed_no.monitor_vs_screen": "Monitoring vs Screening",
+        "diagnosed_no.screening_options": "Screening Options",
+        "diagnosed_no.interpretation_routes": "Understanding Screening Results",
+        
+        # Not yet evaluated paths
+        "diagnosed_no.not_yet_evaluated": "Not Yet Evaluated",
+        "diagnosed_no.no_dx_but_concerns": "Concerns Without Diagnosis",
+        "diagnosed_no.at_home_resources": "At-Home Resources",
+        
+        # Legal and emergency
+        "diagnosed_no.legal_emergency_intro": "Legal & Emergency Support",
+        "diagnosed_yes.legal_and_emergency": "Legal & Emergency Support",
+        
+        # Support and resources
+        "diagnosed_yes.support_affording": "Affording Support",
+        "diagnosed_yes.find_resources": "Finding Resources",
+        
+        # Specific topics
+        "required_docs": "Required Documents",
+        "screening_tools": "Screening Tools",
+        "developmental_milestones": "Developmental Milestones",
+        "red_flags": "Red Flags to Watch For",
+        "next_steps": "Next Steps",
+        "resources": "Resources & Support",
+        "legal_rights": "Legal Rights",
+        "emergency_contacts": "Emergency Contacts",
+        
+        # Default fallbacks
+        "conversation_summary": "Conversation Summary",
+        "Entry Point": "Getting Started"
+    }
+    
+    # Try exact match first
+    if context_path in context_labels:
+        return context_labels[context_path]
+    
+    # Try partial matches for nested paths
+    for key, label in context_labels.items():
+        if context_path.startswith(key):
+            return label
+    
+    # Fallback: convert underscores to spaces and title case
+    return context_path.replace("_", " ").title()
+
+def improve_conversation_summary_display(summary):
+    """Improve the conversation summary display with better formatting and logic."""
+    
+    # Fix user profile display
+    user_profile = summary.get('user_profile', {})
+    
+    # Clean up diagnosis status
+    diagnosis_status = user_profile.get('diagnosis_status', 'unknown')
+    if diagnosis_status == 'diagnosed_yes':
+        diagnosis_display = "Diagnosed"
+    elif diagnosis_status == 'diagnosed_no':
+        diagnosis_display = "Not Diagnosed"
+    else:
+        diagnosis_display = diagnosis_status.replace('_', ' ').title()
+    
+    # Clean up child name (fix "Has" issue)
+    child_name = user_profile.get('child_name', '')
+    if child_name and child_name.lower() in ['has', 'yes', 'no', 'unknown']:
+        child_name = 'Not specified'
+    
+    # Clean up role
+    role = user_profile.get('role', 'unknown')
+    if role == 'parent_caregiver':
+        role_display = "Parent/Caregiver"
+    else:
+        role_display = role.replace('_', ' ').title()
+    
+    # Clean up concerns
+    concerns = user_profile.get('concerns', [])
+    if isinstance(concerns, str):
+        concerns = [concerns]
+    concerns_display = ', '.join(concerns) if concerns else 'Not specified'
+    
+    # Get user-friendly context label
+    context_path = summary.get('final_context', 'Entry Point')
+    context_label = get_user_friendly_context_label(context_path)
+    
+    # Generate better recommendations
+    recommendations = summary.get("next_recommendations", [])
+    if not recommendations or len(recommendations) == 0:
+        # Generate contextual recommendations based on user profile and context
+        if diagnosis_status == 'diagnosed_no':
+            recommendations = [
+                "Schedule a developmental screening",
+                "Learn about early intervention services",
+                "Connect with local support groups"
+            ]
+        elif diagnosis_status == 'diagnosed_yes':
+            recommendations = [
+                "Explore treatment and therapy options",
+                "Find local autism support resources",
+                "Learn about educational rights and IEPs"
+            ]
+        else:
+            recommendations = [
+                "Continue exploring autism support topics",
+                "Consider speaking with a healthcare provider",
+                "Learn more about developmental milestones"
+            ]
+    
+    # Clean up topics discussed
+    topics = summary.get("topics_discussed", [])
+    topic_labels = []
+    for topic in topics:
+        topic_label = get_user_friendly_context_label(topic)
+        topic_labels.append(topic_label)
+    
+    return {
+        'user_profile': {
+            'role': role_display,
+            'child_age': user_profile.get('child_age', 'Not specified'),
+            'diagnosis_status': diagnosis_display,
+            'child_name': child_name,
+            'concerns': concerns_display
+        },
+        'progress': {
+            'current_context': context_label,
+            'topics_discussed_count': len(topics),
+            'conversation_length': summary.get('conversation_length', 0)
+        },
+        'recommendations': recommendations,
+        'topics_discussed': topic_labels
+    }
+
 
 # ---- session state
 if "chat_history" not in st.session_state:
