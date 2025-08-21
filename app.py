@@ -25,6 +25,20 @@ def get_conversation_manager():
 
 manager = get_conversation_manager()
 
+def ensure_consistent_user_id():
+    """Ensure user ID is consistent across the application."""
+    if not st.session_state.get("user_profile"):
+        return "default"
+    
+    user_id = st.session_state.user_profile.get("user_id", "default")
+    
+    # If user_id is a random UUID (8 characters), use "default" instead
+    if len(user_id) == 8 and user_id.isalnum():
+        st.session_state.user_profile["user_id"] = "default"
+        return "default"
+    
+    return user_id
+
 # ---- helper functions (define these first)
 def show_topic_information_with_rag(context_path):
     """Show information about the selected topic with RAG integration."""
@@ -397,6 +411,13 @@ def show_unified_conversation_interface():
         if st.button("🗑️ Clear All Documents"):
             clear_user_documents()
         
+        # Debug section
+        st.markdown("---")
+        st.markdown("### 🔧 Debug")
+        
+        if st.button("🐛 Show RAG Debug Info"):
+            show_rag_debug_info()
+        
     # Topic browsing option
     st.markdown("---")
     st.markdown("### 🔍 Browse Topics")
@@ -408,7 +429,7 @@ def show_unified_conversation_interface():
     # Main conversation area
     st.subheader("Our Conversation")
     
-    # Display chat history with adaptive styling
+    # Display chat history with adaptive styling and transparency
     for message in st.session_state.chat_history:
         if message["role"] == "assistant":
             # Apply tone-based styling
@@ -423,6 +444,43 @@ def show_unified_conversation_interface():
                         st.markdown(f"- {suggestion}")
             else:
                 st.info(f"**🤖 AI Assistant:** {message['content']}")
+            
+            # Add transparency section
+            if message.get("sources") or message.get("mode") or message.get("context_path"):
+                with st.expander("🔍 How I made this decision", expanded=False):
+                    col1, col2 = st.columns(2)
+                    
+                    with col1:
+                        st.markdown("**📚 Sources Used:**")
+                        sources = message.get("sources", [])
+                        if sources:
+                            for i, source in enumerate(sources[:3], 1):
+                                source_name = source.get("source", "Unknown")
+                                if source_name == "user_upload":
+                                    st.markdown(f"• 📄 Your document: {source.get('filename', 'Unknown file')}")
+                                else:
+                                    st.markdown(f"• 📖 Knowledge base: {source_name}")
+                        else:
+                            st.markdown("• 📖 General knowledge base")
+                    
+                    with col2:
+                        st.markdown("**🧠 Decision Process:**")
+                        mode = message.get("mode", "unknown")
+                        if mode == "mongo_only":
+                            st.markdown("• Used structured guidance")
+                        elif mode == "blend":
+                            st.markdown("• Combined guidance + your documents")
+                        elif mode == "vector_only":
+                            st.markdown("• Searched knowledge base")
+                        
+                        confidence = message.get("confidence", 0.8)
+                        st.markdown(f"• Confidence: {confidence:.0%}")
+                    
+                    # Show context path
+                    if message.get("context_path"):
+                        context_path = message["context_path"]
+                        context_label = get_user_friendly_context_label(context_path)
+                        st.markdown(f"**📍 Current Topic:** {context_label}")
             
             if message.get("context_path"):
                 st.caption(f"Context: {message['context_path']}")
@@ -1319,6 +1377,47 @@ def improve_conversation_summary_display(summary):
         'topics_discussed': topic_labels
     }
 
+
+
+def show_rag_debug_info():
+    """Show RAG debug information for troubleshooting."""
+    st.subheader("🔧 RAG System Debug Information")
+    
+    # Get current user ID
+    user_id = ensure_consistent_user_id()
+    st.write(f"**Current User ID:** {user_id}")
+    
+    # Check vector store documents
+    vector_docs = get_vector_store_documents(user_id)
+    st.write(f"**Documents in Vector Store:** {len(vector_docs)}")
+    
+    if vector_docs:
+        st.write("**Available Documents:**")
+        for doc in vector_docs:
+            st.write(f"• {doc['filename']} ({doc['chunks']} chunks)")
+    else:
+        st.warning("No documents found in vector store")
+    
+    # Check physical files
+    user_docs_dir = Path(f"data/user_docs/{user_id}")
+    if user_docs_dir.exists():
+        physical_files = list(user_docs_dir.glob("*"))
+        st.write(f"**Physical Files:** {len(physical_files)}")
+        for file in physical_files:
+            st.write(f"• {file.name}")
+    else:
+        st.warning("No physical files directory found")
+    
+    # Test RAG search
+    if st.button("🧪 Test RAG Search"):
+        try:
+            from rag.ingest_user_docs import search_user_documents
+            test_results = search_user_documents(user_id, "test query", 3)
+            st.write(f"**Test Search Results:** {len(test_results)}")
+            for result in test_results:
+                st.write(f"• Score: {result.get('score', 0):.3f} - {result.get('payload', {}).get('filename', 'Unknown')}")
+        except Exception as e:
+            st.error(f"RAG search failed: {e}")
 
 # ---- session state
 if "chat_history" not in st.session_state:

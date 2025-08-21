@@ -30,8 +30,7 @@ class IntelligentConversationManager:
         
         # Generate user ID if not exists
         if "user_id" not in self.user_profile:
-            import uuid
-            self.user_profile["user_id"] = str(uuid.uuid4())[:8]
+            self.user_profile["user_id"] = "default"
         
     def start_conversation(self, user_profile: Dict) -> Dict:
         """Start a new intelligent conversation based on user profile."""
