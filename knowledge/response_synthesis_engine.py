@@ -195,11 +195,22 @@ class ResponseSynthesisEngine:
         # Get base content from MongoDB
         mongodb_content = self.get_mongodb_content(context_path)
         if not mongodb_content:
+            # Provide a helpful response even when no specific content is found
+            diagnosis_status = user_profile.get("diagnosis_status", "unknown")
+            role = user_profile.get("role", "parent")
+            
+            if diagnosis_status == "diagnosed_no":
+                response = "I understand you're looking for information about autism support. Since your child hasn't been diagnosed yet, I'd recommend starting with developmental screening and monitoring. Would you like to learn more about early signs, screening options, or finding evaluation services?"
+            elif diagnosis_status == "diagnosed_yes":
+                response = "I'm here to help you with autism support resources. Since your child has been diagnosed, I can help you find treatment options, support services, educational resources, and community connections. What specific area would you like to explore?"
+            else:
+                response = "I'm here to help you with autism support and resources. I can provide information about screening, diagnosis, treatment options, support services, and educational resources. What would you like to learn more about?"
+            
             return {
-                "response": "I'm sorry, I don't have specific information about that topic yet.",
+                "response": response,
                 "sources": [],
-                "confidence": 0.0,
-                "next_suggestions": ["Try asking about a different topic", "Check our general resources"]
+                "confidence": 0.5,
+                "next_suggestions": ["Learn about screening options", "Find support resources", "Explore treatment options"]
             }
         
         # Extract external sources for web browsing
