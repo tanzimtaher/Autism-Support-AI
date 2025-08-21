@@ -418,6 +418,9 @@ def show_unified_conversation_interface():
         if st.button("🐛 Show RAG Debug Info"):
             show_rag_debug_info()
         
+        if st.button("🔧 Check System Status"):
+            check_system_status()
+        
     # Topic browsing option
     st.markdown("---")
     st.markdown("### 🔍 Browse Topics")
@@ -521,15 +524,17 @@ def show_unified_conversation_interface():
     # User input
     user_input = st.chat_input("Type your message here...")
     
-    if user_input:
+    if user_input and user_input.strip():
         # Add user message to history
         st.session_state.chat_history.append({
             "role": "user",
-            "content": user_input
+            "content": user_input.strip()
         })
         
-        # Process user input through intelligent manager
-        process_unified_input(user_input)
+        # Show processing indicator
+        with st.spinner("🤔 Thinking..."):
+            # Process user input through intelligent manager
+            process_unified_input(user_input.strip())
         
         # Rerun to update the display
         st.rerun()
@@ -1418,6 +1423,50 @@ def show_rag_debug_info():
                 st.write(f"• Score: {result.get('score', 0):.3f} - {result.get('payload', {}).get('filename', 'Unknown')}")
         except Exception as e:
             st.error(f"RAG search failed: {e}")
+
+
+def check_system_status():
+    """Check the status of various system components."""
+    st.subheader("🔧 System Status Check")
+    
+    # Check OpenAI connection
+    try:
+        import openai
+        client = openai.OpenAI(api_key=st.secrets.get("OPENAI_API_KEY"))
+        # Test with a simple call
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": "Hello"}],
+            max_tokens=5
+        )
+        st.success("✅ OpenAI API: Connected")
+    except Exception as e:
+        st.error(f"❌ OpenAI API: Connection failed - {str(e)}")
+    
+    # Check MongoDB connection
+    try:
+        from pymongo import MongoClient
+        client = MongoClient("mongodb://localhost:27017/")
+        client.admin.command('ping')
+        st.success("✅ MongoDB: Connected")
+    except Exception as e:
+        st.error(f"❌ MongoDB: Connection failed - {str(e)}")
+    
+    # Check Qdrant connection
+    try:
+        from rag.qdrant_client import ensure_collection
+        qdr = ensure_collection("test_collection", size=1536)
+        if qdr:
+            st.success("✅ Qdrant Vector Store: Connected")
+        else:
+            st.error("❌ Qdrant Vector Store: Connection failed")
+    except Exception as e:
+        st.error(f"❌ Qdrant Vector Store: Connection failed - {str(e)}")
+    
+    # Check user documents
+    user_id = ensure_consistent_user_id()
+    vector_docs = get_vector_store_documents(user_id)
+    st.info(f"📄 User Documents: {len(vector_docs)} documents found")
 
 # ---- session state
 if "chat_history" not in st.session_state:

@@ -71,87 +71,104 @@ class IntelligentConversationManager:
     def process_user_response(self, user_input: str, selected_path: str = None) -> Dict:
         """Process user input and generate intelligent response."""
         
-        # Extract and remember user-provided facts
-        self._extract_and_remember_facts(user_input)
-        
-        # Add user input to history
-        self.conversation_history.append({
-            "role": "user",
-            "content": user_input,
-            "timestamp": self._get_timestamp()
-        })
-        
-        # Check for safety terms first
-        safety_warning = self.retrieval_router.get_safety_warning(user_input)
-        if safety_warning:
+        try:
+            # Extract and remember user-provided facts
+            self._extract_and_remember_facts(user_input)
+            
+            # Add user input to history
+            self.conversation_history.append({
+                "role": "user",
+                "content": user_input,
+                "timestamp": self._get_timestamp()
+            })
+            
+            # Check for safety terms first
+            safety_warning = self.retrieval_router.get_safety_warning(user_input)
+            if safety_warning:
+                return {
+                    "response": safety_warning,
+                    "context_path": self.current_context_path,
+                    "next_suggestions": [],
+                    "available_paths": self.available_paths,
+                    "confidence": 1.0,
+                    "sources": [],
+                    "safety_warning": True
+                }
+            
+            # Determine next context path
+            if selected_path:
+                next_context = selected_path
+            else:
+                next_context = self._determine_next_context(user_input)
+            
+            # Update current context
+            self.current_context_path = next_context
+            
+            # Use retrieval router to decide knowledge source
+            mode, vector_results = self.retrieval_router.route(
+                user_input, 
+                self.user_profile, 
+                next_context
+            )
+            
+            # Generate response based on routing mode
+            if mode == "mongo_only":
+                # Use only structured MongoDB data
+                response = self.response_engine.synthesize_response(
+                    user_query=user_input,
+                    context_path=next_context,
+                    user_profile=self.user_profile,
+                    conversation_history=self.conversation_history
+                )
+            elif mode == "blend":
+                # Combine MongoDB + vector search
+                response = self._synthesize_blended_response(
+                    user_input, next_context, vector_results
+                )
+            else:  # vector_only
+                # Use vector search with guided hints
+                response = self._synthesize_vector_response(
+                    user_input, next_context, vector_results
+                )
+            
+            # Update available paths
+            self.available_paths = self.knowledge_adapter.get_available_paths(next_context)
+            
+            # Add response to history
+            self.conversation_history.append({
+                "role": "assistant",
+                "content": response["response"],
+                "context_path": next_context,
+                "sources": response["sources"],
+                "next_suggestions": response["next_suggestions"],
+                "timestamp": self._get_timestamp()
+            })
+            
             return {
-                "response": safety_warning,
-                "context_path": self.current_context_path,
-                "next_suggestions": [],
+                "response": response["response"],
+                "context_path": next_context,
+                "next_suggestions": response["next_suggestions"],
                 "available_paths": self.available_paths,
-                "confidence": 1.0,
-                "sources": [],
-                "safety_warning": True
+                "confidence": response.get("confidence", 0.8),
+                "sources": response["sources"],
+                "mode": mode
             }
-        
-        # Determine next context path
-        if selected_path:
-            next_context = selected_path
-        else:
-            next_context = self._determine_next_context(user_input)
-        
-        # Update current context
-        self.current_context_path = next_context
-        
-        # Use retrieval router to decide knowledge source
-        mode, vector_results = self.retrieval_router.route(
-            user_input, 
-            self.user_profile, 
-            next_context
-        )
-        
-        # Generate response based on routing mode
-        if mode == "mongo_only":
-            # Use only structured MongoDB data
-            response = self.response_engine.synthesize_response(
-                user_query=user_input,
-                context_path=next_context,
-                user_profile=self.user_profile,
-                conversation_history=self.conversation_history
-            )
-        elif mode == "blend":
-            # Combine MongoDB + vector search
-            response = self._synthesize_blended_response(
-                user_input, next_context, vector_results
-            )
-        else:  # vector_only
-            # Use vector search with guided hints
-            response = self._synthesize_vector_response(
-                user_input, next_context, vector_results
-            )
-        
-        # Update available paths
-        self.available_paths = self.knowledge_adapter.get_available_paths(next_context)
-        
-        # Add response to history
-        self.conversation_history.append({
-            "role": "assistant",
-            "content": response["response"],
-            "context_path": next_context,
-            "sources": response["sources"],
-            "next_suggestions": response["next_suggestions"],
-            "timestamp": self._get_timestamp()
-        })
-        
-        return {
-            "response": response["response"],
-            "context_path": next_context,
-            "next_suggestions": response["next_suggestions"],
-            "available_paths": self.available_paths,
-            "confidence": response.get("confidence", 0.8),
-            "sources": response["sources"],
-            "mode": mode
-        }
+            
+        except Exception as e:
+            print(f"❌ Error processing user response: {e}")
+            # Provide a helpful fallback response
+            fallback_response = "I'm having trouble processing that right now. Let me try to help you with some general autism support information. Could you rephrase your question or ask about a specific topic like screening, diagnosis, treatment options, or support resources?"
+            
+            return {
+                "response": fallback_response,
+                "context_path": self.current_context_path or "general",
+                "next_suggestions": ["Ask about screening", "Learn about support resources", "Explore treatment options"],
+                "available_paths": self.available_paths,
+                "confidence": 0.3,
+                "sources": [],
+                "mode": "fallback",
+                "error": str(e)
+            }
     
     def _synthesize_blended_response(self, user_input: str, context_path: str, vector_results: List) -> Dict:
         """Synthesize response combining MongoDB structure with vector search."""

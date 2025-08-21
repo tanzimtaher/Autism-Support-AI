@@ -316,8 +316,12 @@ Please synthesize a comprehensive, empathetic response that directly addresses t
             
         except Exception as e:
             print(f"❌ LLM synthesis error: {e}")
-            # Fallback to MongoDB content
-            return mongodb_content.get("response", "I'm having trouble processing that right now. Let me provide the basic information I have.")
+            # Fallback to MongoDB content with better response
+            base_response = mongodb_content.get("response", "")
+            if base_response:
+                return base_response
+            else:
+                return "I'm here to help you with autism support. Let me provide some general guidance based on your situation. What specific questions do you have about autism support or resources?"
     
     def _get_next_suggestions(self, mongodb_content: Dict, user_profile: Dict) -> List[str]:
         """Generate next step suggestions based on available routes and branches."""
