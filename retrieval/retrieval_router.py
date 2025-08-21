@@ -44,7 +44,7 @@ class RetrievalRouter:
         return "vector_only", vector_results
 
     def _get_vector_results(self, query: str, user_profile: Dict, limit: int = 6) -> List:
-        """Get vector search results with user filtering."""
+        
         try:
             # Generate embedding for query
             query_vector = embed_single(query)
@@ -55,16 +55,40 @@ class RetrievalRouter:
             # Get user ID for filtering
             user_id = user_profile.get("user_id", "public")
             
-            # Search with user isolation
-            results = search_with_user_filter(
+            all_results = []
+            
+            # 1. Search shared knowledge base with diversity
+            from rag.qdrant_client import search_with_diversity
+            shared_results = search_with_diversity(
                 collection_name="kb_autism_support",
                 query_vector=query_vector,
                 user_id=user_id,
-                k=limit
+                k=limit // 2,  # Half from shared KB
+                min_sources=2  # Ensure at least 2 different sources
             )
+            all_results.extend(shared_results)
             
-            print(f"✅ Found {len(results)} vector results")
-            return results
+            # 2. Search user's private documents (if user has documents)
+            if user_id != "public":
+                from rag.ingest_user_docs import search_user_documents
+                user_results = search_user_documents(user_id, query, limit // 2)
+                all_results.extend(user_results)
+            
+            # Sort by score and limit
+            all_results.sort(key=lambda x: x.get("score", 0), reverse=True)
+            all_results = all_results[:limit]
+            
+            # Log diversity information
+            sources = set()
+            for result in all_results:
+                if result.get("payload"):
+                    source = result["payload"].get("source", "unknown")
+                    if not source:
+                        source = result["payload"].get("filename", "unknown")
+                    sources.add(source)
+            
+            print(f"✅ Found {len(all_results)} vector results from {len(sources)} sources ({len(shared_results)} shared, {len(user_results) if user_id != 'public' else 0} private)")
+            return all_results
             
         except Exception as e:
             print(f"❌ Vector search error: {e}")

@@ -15,6 +15,7 @@ numpy
 llama-index
 chromadb
 qdrant-client
+sentence-transformers
 
 # File processing
 python-docx
