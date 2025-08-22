@@ -17,10 +17,12 @@ A comprehensive AI-powered support system for families and individuals affected 
 - **📊 Knowledge Management**: Centralized management of expert resources
 
 ### **Technical Architecture**
-- **🔄 Dual-Index System**: MongoDB for structured flows + Qdrant for vector search
-- **🧠 Multi-Tenant**: UUID-based user isolation
-- **🌐 Web Integration**: Real-time web browsing for dynamic context
-- **📈 Scalable**: Production-ready vector database with metadata filtering
+- **🧠 Advanced RAG System**: Multi-source retrieval with patient context integration
+- **🔍 Vector Search**: Qdrant with 1536-dimensional embeddings and diversity optimization
+- **📊 Structured Knowledge**: MongoDB for guided conversation flows and treatment paths
+- **🌐 Real-time Integration**: Web browsing + patient documents + expert knowledge
+- **🔒 Privacy-First**: User-specific document isolation with transparent source attribution
+- **📈 Production-Ready**: Scalable vector database with intelligent query routing
 
 ## 🛠️ Installation
 
@@ -104,48 +106,122 @@ A comprehensive AI-powered support system for families and individuals affected 
 
 ## 🏗️ Architecture
 
+### **RAG System Overview**
+
+The Autism Support App v2 implements a **comprehensive Retrieval-Augmented Generation (RAG) system** that combines multiple knowledge sources to provide personalized, context-aware support for autism families.
+
+### **Core RAG Components**
+
+#### **1. Knowledge Sources**
+- **Qdrant Vector Store**: Primary knowledge base with 1536-dimensional embeddings
+  - `user_docs_{user_id}`: Private patient documents (diagnosis reports, evaluations, therapy notes)
+  - `kb_autism_support`: Shared autism knowledge base (research, guidelines, resources)
+- **MongoDB**: Structured conversation flows and guided support paths
+- **Web Integration**: Real-time information retrieval for dynamic context
+- **Patient Documents**: Real-time analysis and context extraction
+
+#### **2. Intelligent Query Routing**
+- **RetrievalRouter.route()**: Determines optimal knowledge source combination
+- **Safety Detection**: Routes critical queries to appropriate resources
+- **Context Awareness**: Adapts search strategy based on user profile and conversation state
+
+#### **3. Multi-Source Vector Search**
+- **search_with_diversity()**: Ensures multiple source perspectives for comprehensive responses
+- **search_user_documents()**: Patient-specific document retrieval with semantic search
+- **Hybrid Search**: Combines shared knowledge with user-specific documents
+
+#### **4. Response Synthesis Engine**
+- **Multi-Source Integration**: Intelligently blends information from 4+ sources
+- **Patient Context Integration**: Automatically extracts and utilizes patient-specific details
+- **OpenAI GPT-4**: Advanced language model for empathetic, personalized responses
+
 ### **File Structure**
 ```
 autism_support_app_v2/
-├── app.py                          # Main Streamlit application
-├── pages/                          # Streamlit pages
-│   ├── guided_conversation_ui.py   # Guided conversation interface
-│   ├── conversational_ui.py        # Free chat interface
-│   └── upload_docs.py              # Admin document upload
-├── knowledge/                      # Knowledge management
-│   ├── intelligent_conversation_manager.py  # Core orchestrator
-│   ├── response_synthesis_engine.py         # Response generation
-│   └── structured_mongo.json               # Structured knowledge base
-├── rag/                           # Vector operations
-│   ├── qdrant_client.py           # Vector database client
-│   ├── embeddings.py              # Text-to-vector conversion
-│   ├── ingest_shared_kb.py        # Shared knowledge ingestion
-│   ├── ingest_user_docs.py        # User document ingestion
-│   └── process_admin_docs.py      # Admin document processing
-├── app/services/                  # Service layer
-│   └── knowledge_adapter.py       # Knowledge base adapter
-├── retrieval/                     # Query routing
-│   └── retrieval_router.py        # Smart query routing
+├── app.py                          # Main Streamlit application with unified UI
+├── knowledge/                      # Core RAG orchestration
+│   ├── intelligent_conversation_manager.py  # RAG system orchestrator
+│   ├── response_synthesis_engine.py         # Multi-source response synthesis
+│   └── knowledge_adapter.py                 # Conversation flow management
+├── rag/                           # Vector operations and document processing
+│   ├── qdrant_client.py           # Vector database client with diversity search
+│   ├── embeddings.py              # OpenAI text-to-vector conversion
+│   ├── ingest_user_docs.py        # Patient document ingestion and processing
+│   └── process_admin_docs.py      # Expert knowledge base management
+├── retrieval/                     # Intelligent query routing
+│   └── retrieval_router.py        # Smart routing between knowledge sources
+├── utils/                         # Patient context utilities
+│   └── patient_utils.py           # Document parsing and patient summary generation
 └── data/                          # Data storage
-    ├── admin_uploaded_docs/       # Admin documents
-    ├── user_docs/                 # User documents
-    └── processed_admin_docs/      # Processed documents
+    ├── admin_uploaded_docs/       # Expert-curated resources
+    ├── user_docs/                 # Patient-specific documents
+    └── qdrant_storage/            # Vector database storage
 ```
 
-### **Data Flow**
+### **RAG Data Flow**
 
-1. **User Input** → **Retrieval Router**
-2. **Router Decision**:
-   - Safety terms → MongoDB only
-   - Guided conversation → Blend (MongoDB + Vector)
-   - Free-form query → Vector only
-3. **Vector Search**:
-   - Shared knowledge base (all users)
-   - User's private documents (if available)
-4. **Response Synthesis**:
-   - Combine structured + vector results
-   - Apply user context and profile
-   - Generate empathetic response
+#### **1. Query Processing**
+```
+User Query → RetrievalRouter.route() → Knowledge Source Selection
+```
+
+#### **2. Multi-Source Retrieval**
+```
+Vector Search:
+├── search_with_diversity() → Shared knowledge base
+├── search_user_documents() → Patient-specific documents
+└── Web browsing → Dynamic information
+
+MongoDB:
+├── Structured conversation flows
+├── Guided support paths
+└── Treatment recommendations
+```
+
+#### **3. Context Building & Synthesis**
+```
+Information Sources:
+├── Patient Documents (highest priority)
+├── Shared Knowledge Base
+├── MongoDB Structured Flows
+├── Web Content
+└── User Profile & History
+
+Context Processing:
+├── Patient Context Extraction (diagnosis, age, concerns)
+├── Query Enhancement with Patient Details
+├── Multi-Source Information Blending
+└── Structured Context for LLM
+```
+
+#### **4. Response Generation**
+```
+OpenAI GPT-4 Processing:
+├── Structured Context Input
+├── Patient-Specific Personalization
+├── Multi-Source Synthesis
+└── Empathetic Response Generation
+
+Output:
+├── Personalized Response
+├── Source Transparency
+├── Confidence Scoring
+└── Next Step Suggestions
+```
+
+### **Patient Context Integration**
+
+#### **Document Processing Pipeline**
+1. **Upload**: Real-time document ingestion into user-specific vector collections
+2. **Parsing**: Automatic extraction of diagnosis, age, concerns, and key findings
+3. **Context Enhancement**: Query enhancement with patient-specific details
+4. **Response Personalization**: AI responses reference specific patient information
+
+#### **Transparency Features**
+- **"How I made this decision"**: Shows actual sources used (patient docs, knowledge base, etc.)
+- **Source Attribution**: Individual document names and knowledge sources
+- **Confidence Scoring**: 95% when using patient documents, 90% with web content, 70% with general knowledge
+- **Context Path Tracking**: Current conversation topic and guidance path
 
 ## 🔧 Configuration
 
