@@ -7,7 +7,7 @@ import json
 import uuid
 import os
 from pathlib import Path
-from qdrant_client.models import PointStruct
+from qdrant_client.models import PointStruct, Filter, FieldCondition, MatchValue
 from .qdrant_client import ensure_collection
 from .embeddings import embed
 from .process_admin_docs import extract_text_from_file
@@ -325,7 +325,6 @@ def get_user_documents(user_id: str) -> list:
         # Get all documents for the user
         results = qdr.scroll(
             collection_name=collection_name,
-            scroll_filter={"must": [{"key": "user_id", "match": {"value": user_id}}]},
             limit=100
         )
         
@@ -335,7 +334,9 @@ def get_user_documents(user_id: str) -> list:
                 "filename": point.payload.get("filename", "Unknown"),
                 "file_type": point.payload.get("file_type", "Unknown"),
                 "upload_timestamp": point.payload.get("upload_timestamp", ""),
-                "content_preview": point.payload.get("content", "")[:200] + "..."
+                "content_samples": [point.payload.get("content", "")[:200]],
+                "chunks": 1,
+                "file_size": len(point.payload.get("content", ""))
             })
         
         return documents
@@ -412,14 +413,14 @@ def delete_user_document(user_id: str, filename: str) -> bool:
             collection_name=collection_name,
             limit=1000,
             with_payload=True,
-            scroll_filter=models.Filter(
-                must=[
-                    models.FieldCondition(
-                        key="filename",
-                        match=models.MatchValue(value=filename)
-                    )
-                ]
-            )
+                    scroll_filter=Filter(
+            must=[
+                FieldCondition(
+                    key="filename",
+                    match=MatchValue(value=filename)
+                )
+            ]
+        )
         )[0]
         
         if not existing_points:
@@ -454,11 +455,11 @@ def clear_user_documents(user_id: str) -> bool:
             return False
         
         # Delete all points in the collection
-        qdr.delete(collection_name=collection_name, points_selector=models.Filter(
+        qdr.delete(collection_name=collection_name, points_selector=Filter(
             must=[
-                models.FieldCondition(
+                FieldCondition(
                     key="user_id",
-                    match=models.MatchValue(value=user_id)
+                    match=MatchValue(value=user_id)
                 )
             ]
         ))

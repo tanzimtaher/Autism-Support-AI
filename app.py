@@ -424,6 +424,20 @@ def show_unified_conversation_interface():
         if st.button("🧪 Test RAG Functionality"):
             test_rag_functionality()
         
+        if st.button("📋 Show Patient Summary"):
+            user_id = ensure_consistent_user_id()
+            patient_info = parse_patient_documents(user_id)
+            if patient_info:
+                st.subheader("📋 Patient Information Summary")
+                summary = create_patient_summary(patient_info)
+                st.markdown(summary)
+                
+                # Show raw patient info for debugging
+                with st.expander("🔍 Raw Patient Data"):
+                    st.json(patient_info)
+            else:
+                st.warning("No patient information found in documents.")
+        
     # Topic browsing option
     st.markdown("---")
     st.markdown("### 🔍 Browse Topics")
@@ -536,8 +550,18 @@ def show_unified_conversation_interface():
         
         # Show processing indicator
         with st.spinner("🤔 Thinking..."):
-            # Process user input through intelligent manager
-            process_unified_input(user_input.strip())
+            # Enhance query with patient context if available
+            try:
+                user_id = ensure_consistent_user_id()
+                patient_info = parse_patient_documents(user_id)
+                enhanced_query = enhance_user_query_with_patient_context(user_input.strip(), patient_info)
+                
+                # Process enhanced user input through intelligent manager
+                process_unified_input(enhanced_query)
+            except Exception as e:
+                print(f"⚠️ Could not enhance query with patient context: {e}")
+                # Fallback to original processing
+                process_unified_input(user_input.strip())
         
         # Rerun to update the display
         st.rerun()
@@ -567,7 +591,8 @@ def process_unified_input(user_input):
         "context_path": response_result["context_path"],
         "conversation_type": conversation_type,
         "next_suggestions": response_result.get("next_suggestions"),
-        "confidence": response_result.get("confidence", 0.0)
+        "confidence": response_result.get("confidence", 0.0),
+        "sources": response_result.get("sources", [])
     })
     
     # Show safety alert if present
@@ -1468,8 +1493,29 @@ def check_system_status():
     
     # Check user documents
     user_id = ensure_consistent_user_id()
-    vector_docs = get_vector_store_documents(user_id)
-    st.info(f"📄 User Documents: {len(vector_docs)} documents found")
+    
+    # Try to get documents using the same method as the RAG system
+    try:
+        from rag.ingest_user_docs import search_user_documents
+        # Use a simple query to find all documents (empty query should return all)
+        vector_docs = search_user_documents(user_id, "", 10)  # Empty query, limit 10
+        if vector_docs:
+            st.success(f"📄 User Documents: {len(vector_docs)} documents found")
+            # Show document names for debugging
+            with st.expander("📋 Document Details", expanded=False):
+                for doc in vector_docs[:3]:  # Show first 3 documents
+                    filename = doc.get("payload", {}).get("filename", "Unknown")
+                    st.write(f"• {filename}")
+        else:
+            st.warning(f"📄 User Documents: No documents found for user '{user_id}'")
+    except Exception as e:
+        st.error(f"❌ Error checking user documents: {e}")
+        # Fallback to the old method
+        try:
+            vector_docs = get_vector_store_documents(user_id)
+            st.info(f"📄 User Documents: {len(vector_docs)} documents found (fallback method)")
+        except Exception as e2:
+            st.error(f"❌ Fallback method also failed: {e2}")
 
 
 def test_rag_functionality():
@@ -1527,6 +1573,140 @@ def test_rag_functionality():
             st.error(f"RAG test failed: {e}")
             import traceback
             st.code(traceback.format_exc())
+
+
+def parse_patient_documents(user_id: str = "default") -> dict:
+    """Parse patient documents to extract key information."""
+    try:
+        vector_docs = get_vector_store_documents(user_id)
+        if not vector_docs:
+            return {}
+        
+        patient_info = {
+            "name": None,
+            "age": None,
+            "diagnosis": None,
+            "concerns": [],
+            "evaluation_date": None,
+            "key_findings": [],
+            "recommendations": []
+        }
+        
+        # Extract information from each document
+        for doc in vector_docs:
+            filename = doc.get("filename", "").lower()
+            
+            # Look for diagnosis/evaluation documents
+            if any(keyword in filename for keyword in ["diagnosis", "evaluation", "assessment", "report"]):
+                # Extract key information from content samples
+                for sample in doc.get("content_samples", []):
+                    content = sample.lower()
+                    
+                    # Extract name
+                    if not patient_info["name"]:
+                        name_patterns = [
+                            r"patient name[:\s]+([a-zA-Z\s]+)",
+                            r"name[:\s]+([a-zA-Z\s]+)",
+                            r"([a-zA-Z]+)\s+[a-zA-Z]+\s+[a-zA-Z]+"  # First Middle Last pattern
+                        ]
+                        for pattern in name_patterns:
+                            import re
+                            match = re.search(pattern, content)
+                            if match:
+                                patient_info["name"] = match.group(1).strip().title()
+                                break
+                    
+                    # Extract age
+                    if not patient_info["age"]:
+                        age_patterns = [
+                            r"(\d+)\s*(?:year|yr)s?\s*old",
+                            r"age[:\s]+(\d+)",
+                            r"(\d+)\s*(?:years?|yrs?)"
+                        ]
+                        for pattern in age_patterns:
+                            match = re.search(pattern, content)
+                            if match:
+                                patient_info["age"] = int(match.group(1))
+                                break
+                    
+                    # Extract diagnosis
+                    if not patient_info["diagnosis"]:
+                        if "autism" in content or "asd" in content:
+                            patient_info["diagnosis"] = "Autism Spectrum Disorder"
+                        elif "diagnosis" in content:
+                            # Look for diagnosis section
+                            diagnosis_section = content.split("diagnosis")[-1][:500]
+                            patient_info["diagnosis"] = diagnosis_section.strip()
+                    
+                    # Extract concerns
+                    concern_keywords = ["concern", "difficulty", "challenge", "issue", "problem"]
+                    for keyword in concern_keywords:
+                        if keyword in content and keyword not in patient_info["concerns"]:
+                            patient_info["concerns"].append(keyword)
+                    
+                    # Extract key findings
+                    if "finding" in content or "result" in content:
+                        findings_section = content.split("finding")[-1][:300]
+                        if findings_section.strip():
+                            patient_info["key_findings"].append(findings_section.strip())
+        
+        return patient_info
+        
+    except Exception as e:
+        print(f"❌ Error parsing patient documents: {e}")
+        return {}
+
+def create_patient_summary(patient_info: dict) -> str:
+    """Create a human-readable summary of patient information."""
+    if not patient_info:
+        return "No patient information available."
+    
+    summary_parts = []
+    
+    if patient_info.get("name"):
+        summary_parts.append(f"**Patient Name:** {patient_info['name']}")
+    
+    if patient_info.get("age"):
+        summary_parts.append(f"**Age:** {patient_info['age']} years old")
+    
+    if patient_info.get("diagnosis"):
+        summary_parts.append(f"**Diagnosis:** {patient_info['diagnosis']}")
+    
+    if patient_info.get("concerns"):
+        concerns_text = ", ".join(patient_info["concerns"][:3])  # Limit to 3 concerns
+        summary_parts.append(f"**Main Concerns:** {concerns_text}")
+    
+    if patient_info.get("key_findings"):
+        findings_text = "; ".join(patient_info["key_findings"][:2])  # Limit to 2 findings
+        summary_parts.append(f"**Key Findings:** {findings_text}")
+    
+    if summary_parts:
+        return "\n".join(summary_parts)
+    else:
+        return "Limited patient information available."
+
+def enhance_user_query_with_patient_context(user_query: str, patient_info: dict) -> str:
+    """Enhance user query with patient context for better RAG retrieval."""
+    if not patient_info:
+        return user_query
+    
+    enhanced_query = user_query
+    
+    # Add patient context to query
+    if patient_info.get("name"):
+        enhanced_query += f" Patient: {patient_info['name']}"
+    
+    if patient_info.get("age"):
+        enhanced_query += f" Age: {patient_info['age']} years"
+    
+    if patient_info.get("diagnosis"):
+        enhanced_query += f" Diagnosis: {patient_info['diagnosis']}"
+    
+    if patient_info.get("concerns"):
+        concerns = ", ".join(patient_info["concerns"][:2])
+        enhanced_query += f" Concerns: {concerns}"
+    
+    return enhanced_query
 
 # ---- session state
 if "chat_history" not in st.session_state:

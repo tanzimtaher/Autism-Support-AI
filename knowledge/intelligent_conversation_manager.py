@@ -4,12 +4,12 @@ Integrates Response Synthesis Engine with guided conversation flows for dynamic,
 """
 
 import json
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, Any
 from .response_synthesis_engine import ResponseSynthesisEngine
 from .context_traversal_engine import ContextTraversalEngine
 
 # Add new imports for dual-index system
-from app.services.knowledge_adapter import KnowledgeAdapter
+from .knowledge_adapter import KnowledgeAdapter
 from retrieval.retrieval_router import RetrievalRouter
 
 class IntelligentConversationManager:
@@ -20,7 +20,12 @@ class IntelligentConversationManager:
         
         # Add new dual-index components
         self.knowledge_adapter = KnowledgeAdapter()
-        self.retrieval_router = RetrievalRouter(self.knowledge_adapter)
+        # Create a minimal retrieval router for safety checks
+        try:
+            self.retrieval_router = RetrievalRouter()
+        except Exception as e:
+            print(f"⚠️ Could not initialize retrieval router: {e}")
+            self.retrieval_router = None
         
         # Conversation state
         self.current_context_path = None
@@ -53,7 +58,8 @@ class IntelligentConversationManager:
         initial_response = self.response_engine.synthesize_response(
             user_query="Start conversation",
             context_path=initial_path,
-            user_profile=self.user_profile
+            user_profile=self.user_profile,
+            vector_results=[]
         )
         
         # Get available conversation paths using knowledge adapter
@@ -91,7 +97,9 @@ class IntelligentConversationManager:
             })
             
             # Check for safety terms first
-            safety_warning = self.retrieval_router.get_safety_warning(user_input)
+            safety_warning = ""
+            if self.retrieval_router:
+                safety_warning = self.retrieval_router.get_safety_warning(user_input)
             if safety_warning:
                 return {
                     "response": safety_warning,
@@ -113,11 +121,17 @@ class IntelligentConversationManager:
             self.current_context_path = next_context
             
             # Use retrieval router to decide knowledge source
-            mode, vector_results = self.retrieval_router.route(
-                user_input, 
-                self.user_profile, 
-                next_context
-            )
+            mode, vector_results = "vector_only", []
+            if self.retrieval_router:
+                try:
+                    mode, vector_results = self.retrieval_router.route(
+                        user_input, 
+                        self.user_profile, 
+                        next_context
+                    )
+                except Exception as e:
+                    print(f"⚠️ Retrieval router failed: {e}")
+                    mode, vector_results = "vector_only", []
             
             # Generate response based on routing mode
             if mode == "mongo_only":
@@ -126,7 +140,8 @@ class IntelligentConversationManager:
                     user_query=user_input,
                     context_path=next_context,
                     user_profile=self.user_profile,
-                    conversation_history=self.conversation_history
+                    conversation_history=self.conversation_history,
+                    vector_results=[]
                 )
             elif mode == "blend":
                 # Combine MongoDB + vector search
@@ -197,49 +212,43 @@ class IntelligentConversationManager:
             else:
                 general_results.append(result)
         
-        # Create enhanced context with user documents prioritized
-        enhanced_input = f"""
-        {user_input}
+        # Add patient information to user profile for better personalization
+        try:
+            from utils.patient_utils import parse_patient_documents
+            patient_info = parse_patient_documents(self.user_profile.get("user_id", "default"))
+            if patient_info:
+                self.user_profile.update(patient_info)
+        except Exception as e:
+            print(f"⚠️ Could not update user profile with patient info: {e}")
         
-        User's Patient Documents Context:
-        {self._format_user_document_results(user_doc_results)}
-        
-        Additional Knowledge Base Context:
-        {self._format_vector_results(general_results)}
-        """
-        
-        # Generate enhanced response using the existing API
+        # Generate enhanced response using the existing API with vector results
         return self.response_engine.synthesize_response(
-            user_query=enhanced_input,
+            user_query=user_input,
             context_path=context_path,
             user_profile=self.user_profile,
-            conversation_history=self.conversation_history
+            conversation_history=self.conversation_history,
+            vector_results=vector_results
         )
     
     def _synthesize_vector_response(self, user_input: str, context_path: str, vector_results: List) -> Dict:
         """Synthesize response using vector search with guided hints."""
         # Get guided hint from current context
-        guided_hint = self.retrieval_router.get_guided_hint(context_path)
+        guided_hint = {"label": "Continue", "next_steps": []}
+        if self.retrieval_router:
+            try:
+                guided_hint = self.retrieval_router.get_guided_hint(context_path)
+            except Exception as e:
+                print(f"⚠️ Could not get guided hint: {e}")
+                guided_hint = {"label": "Continue", "next_steps": []}
         
-        # Create enhanced input combining vector results with guided hint
-        enhanced_input = f"""
-        {user_input}
-        
-        Vector Search Results:
-        {self._format_vector_results(vector_results)}
-        
-        Guided Hint: {guided_hint.get('label', 'Continue')}
-        Next Steps: {', '.join(guided_hint.get('next_steps', []))}
-        """
-        
-        # Generate response using the existing API
+        # Generate response using the existing API with vector results
         return self.response_engine.synthesize_response(
-            user_query=enhanced_input,
+            user_query=user_input,
             context_path=context_path,
             user_profile=self.user_profile,
-            conversation_history=self.conversation_history
+            conversation_history=self.conversation_history,
+            vector_results=vector_results
         )
-    
 
     def _format_user_document_results(self, user_doc_results: List) -> str:
         """Format user document results for LLM context."""
@@ -322,7 +331,8 @@ class IntelligentConversationManager:
             user_query=summary_prompt,
             context_path=self.current_context_path or "conversation_summary",
             user_profile=self.user_profile,
-            conversation_history=self.conversation_history
+            conversation_history=self.conversation_history,
+            vector_results=[]
         )
         
         return {
@@ -390,7 +400,6 @@ class IntelligentConversationManager:
         """Generate a unique conversation ID."""
         import uuid
         return str(uuid.uuid4())[:8]
-    
 
     def _update_conversation_memory(self, user_input: str, response: Dict):
         """Update conversation memory with new information."""

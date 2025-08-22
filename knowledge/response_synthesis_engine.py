@@ -8,7 +8,7 @@ import openai
 import streamlit as st
 import requests
 from bs4 import BeautifulSoup
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, Any
 from pymongo import MongoClient
 from urllib.parse import urlparse
 import re
@@ -178,7 +178,8 @@ class ResponseSynthesisEngine:
         user_query: str, 
         context_path: str, 
         user_profile: Dict,
-        conversation_history: List[Dict] = None
+        conversation_history: List[Dict] = None,
+        vector_results: List[Dict] = None
     ) -> Dict:
         """
         Synthesize a comprehensive response combining MongoDB content and web browsing.
@@ -194,7 +195,16 @@ class ResponseSynthesisEngine:
         
         # Get base content from MongoDB
         mongodb_content = self.get_mongodb_content(context_path)
-        if not mongodb_content:
+        
+        # Check if we have vector results (patient documents) even if MongoDB content is missing
+        has_patient_docs = bool(vector_results and any(
+            result.get("payload", {}).get("source") == "user_upload" or 
+            result.get("payload", {}).get("type") == "user_document"
+            for result in vector_results
+        ))
+        
+        # Only fall back to hardcoded response if we have NO content at all
+        if not mongodb_content and not has_patient_docs:
             # Provide a helpful response even when no specific content is found
             diagnosis_status = user_profile.get("diagnosis_status", "unknown")
             role = user_profile.get("role", "parent")
@@ -211,6 +221,17 @@ class ResponseSynthesisEngine:
                 "sources": [],
                 "confidence": 0.5,
                 "next_suggestions": ["Learn about screening options", "Find support resources", "Explore treatment options"]
+            }
+        
+        # If we have patient documents, create a minimal MongoDB content structure
+        if not mongodb_content and has_patient_docs:
+            mongodb_content = {
+                "response": f"Information about {context_path}",
+                "tone": "supportive",
+                "source": "",
+                "routes": [],
+                "branches": [],
+                "options": []
             }
         
         # Extract external sources for web browsing
@@ -242,19 +263,71 @@ class ResponseSynthesisEngine:
             mongodb_content=mongodb_content,
             web_content=web_content,
             user_profile=user_profile,
-            conversation_history=conversation_history
+            conversation_history=conversation_history,
+            vector_results=vector_results or []
         )
         
         # Determine next suggestions based on available routes/branches
         next_suggestions = self._get_next_suggestions(mongodb_content, user_profile)
         
+        # Calculate confidence based on sources
+        has_user_docs = bool(vector_results and any(
+            result.get("payload", {}).get("source") == "user_upload" or 
+            result.get("payload", {}).get("type") == "user_document"
+            for result in vector_results
+        ))
+        
+        # Build sources list in the format the UI expects
+        sources = []
+        
+        # Add user documents if available
+        if has_user_docs:
+            # Get user document filenames for display
+            user_doc_filenames = []
+            for result in vector_results:
+                payload = result.get("payload", {})
+                if payload.get("source") == "user_upload" or payload.get("type") == "user_document":
+                    filename = payload.get("filename", "Unknown file")
+                    if filename not in user_doc_filenames:
+                        user_doc_filenames.append(filename)
+            
+            # Add each user document as a separate source
+            for filename in user_doc_filenames[:3]:  # Limit to 3 documents
+                sources.append({
+                    "source": "user_upload",
+                    "filename": filename,
+                    "type": "user_document"
+                })
+        
+        # Add context path
+        if context_path:
+            sources.append({
+                "source": context_path,
+                "type": "knowledge_base"
+            })
+        
+        # Add web content sources
+        for w in web_content:
+            sources.append({
+                "source": w["source"],
+                "type": "web_content"
+            })
+        
+        # Add general knowledge base if no user docs but vector results
+        if vector_results and not has_user_docs:
+            sources.append({
+                "source": "General knowledge base",
+                "type": "knowledge_base"
+            })
+        
         return {
             "response": synthesized_response,
-            "sources": [context_path] + [w["source"] for w in web_content],
-            "confidence": 0.9 if web_content else 0.7,
+            "sources": sources,
+            "confidence": 0.95 if has_user_docs else (0.9 if web_content else 0.7),
             "next_suggestions": next_suggestions,
             "mongodb_content": mongodb_content,
-            "web_content": web_content
+            "web_content": web_content,
+            "vector_results": vector_results or []
         }
     
     def _llm_synthesize(
@@ -263,7 +336,8 @@ class ResponseSynthesisEngine:
         mongodb_content: Dict, 
         web_content: List[Dict],
         user_profile: Dict,
-        conversation_history: List[Dict] = None
+        conversation_history: List[Dict] = None,
+        vector_results: List[Dict] = None
     ) -> str:
         """Use LLM to synthesize a comprehensive response."""
         
@@ -278,6 +352,35 @@ class ResponseSynthesisEngine:
             # Add MongoDB content
             if mongodb_content.get("response"):
                 context_parts.append(f"Base Information: {mongodb_content['response']}")
+            
+            # Add vector search results (prioritize user documents)
+            if vector_results:
+                user_doc_results = []
+                general_results = []
+                
+                for result in vector_results:
+                    payload = result.get("payload", {})
+                    if payload.get("source") == "user_upload" or payload.get("type") == "user_document":
+                        user_doc_results.append(result)
+                    else:
+                        general_results.append(result)
+                
+                # Add user documents first (highest priority)
+                if user_doc_results:
+                    context_parts.append("Patient-Specific Documents:")
+                    for i, result in enumerate(user_doc_results[:3], 1):
+                        payload = result.get("payload", {})
+                        filename = payload.get("filename", "Unknown file")
+                        content = payload.get("content", "")[:500]
+                        context_parts.append(f"{i}. {filename}: {content}...")
+                
+                # Add general knowledge results
+                if general_results:
+                    context_parts.append("Additional Knowledge Base:")
+                    for i, result in enumerate(general_results[:3], 1):
+                        payload = result.get("payload", {})
+                        content = payload.get("response", payload.get("content", ""))[:300]
+                        context_parts.append(f"{i}. {content}...")
             
             # Add web content
             for web_item in web_content:
@@ -297,8 +400,35 @@ class ResponseSynthesisEngine:
                     history_context += f"{role}: {content}\n"
                 context_parts.append(history_context)
             
+            # Add patient document context if available
+            try:
+                from utils.patient_utils import parse_patient_documents, create_patient_summary
+                user_id = user_profile.get("user_id", "default")
+                patient_info = parse_patient_documents(user_id)
+                
+                if patient_info:
+                    patient_summary = create_patient_summary(patient_info)
+                    context_parts.append(f"Patient Information:\n{patient_summary}")
+                    
+                    # Add specific patient details for personalization
+                    if patient_info.get("name"):
+                        context_parts.append(f"Focus on {patient_info['name']}'s specific situation and needs.")
+                    if patient_info.get("age"):
+                        context_parts.append(f"Provide age-appropriate recommendations for a {patient_info['age']}-year-old child.")
+                    if patient_info.get("concerns"):
+                        concerns = ", ".join(patient_info["concerns"][:3])
+                        context_parts.append(f"Address these specific concerns: {concerns}")
+            except Exception as e:
+                print(f"⚠️ Could not add patient context: {e}")
+                # Continue without patient context
+            
             # Combine all context
             full_context = "\n\n".join(context_parts)
+            
+            # Debug logging
+            print(f"🔍 DEBUG: Context parts count: {len(context_parts)}")
+            print(f"🔍 DEBUG: Full context length: {len(full_context)}")
+            print(f"🔍 DEBUG: Patient info found: {bool(any('Patient Information:' in part for part in context_parts))}")
             
             # Create synthesis prompt
             messages = [
@@ -306,10 +436,16 @@ class ResponseSynthesisEngine:
                     "role": "system",
                     "content": """You are an empathetic autism support specialist. Synthesize information from multiple sources to provide comprehensive, personalized responses. 
                     
+                    CRITICAL: You MUST prioritize and reference specific information from patient documents when available.
+                    If patient documents contain specific details (name, age, diagnosis, concerns), incorporate these naturally into your response.
+                    Do NOT give generic responses when patient-specific information is available.
+                    
                     Guidelines:
                     - Be warm, supportive, and understanding
-                    - Personalize responses based on user profile
+                    - Personalize responses based on user profile and patient documents
                     - Combine information from multiple sources seamlessly
+                    - Prioritize patient-specific information from uploaded documents
+                    - Reference specific details from the patient's documents when relevant
                     - Provide actionable, practical advice
                     - Use a conversational, caring tone
                     - Address the specific user query directly"""
@@ -321,11 +457,14 @@ class ResponseSynthesisEngine:
 Available Information:
 {full_context}
 
+IMPORTANT: If patient documents contain specific information, use it to provide a personalized response. Do not give generic advice when patient details are available.
+
 Please synthesize a comprehensive, empathetic response that directly addresses the user's question using all available information."""
                 }
             ]
             
             # Generate response
+            print(f"🔍 DEBUG: Sending request to OpenAI with {len(messages)} messages")
             response = self.openai_client.chat.completions.create(
                 model="gpt-4o-mini",
                 messages=messages,
@@ -333,15 +472,23 @@ Please synthesize a comprehensive, empathetic response that directly addresses t
                 temperature=0.7
             )
             
-            return response.choices[0].message.content
+            result = response.choices[0].message.content
+            print(f"🔍 DEBUG: OpenAI response received, length: {len(result)}")
+            return result
             
         except Exception as e:
             print(f"❌ LLM synthesis error: {e}")
+            print(f"🔍 DEBUG: Error type: {type(e).__name__}")
+            print(f"🔍 DEBUG: Context parts that failed: {len(context_parts)}")
+            print(f"🔍 DEBUG: MongoDB content available: {bool(mongodb_content)}")
+            
             # Fallback to MongoDB content with better response
             base_response = mongodb_content.get("response", "")
             if base_response:
+                print(f"🔍 DEBUG: Using MongoDB fallback response")
                 return base_response
             else:
+                print(f"🔍 DEBUG: Using generic fallback response")
                 return "I'm here to help you with autism support. Let me provide some general guidance based on your situation. What specific questions do you have about autism support or resources?"
     
     def _get_next_suggestions(self, mongodb_content: Dict, user_profile: Dict) -> List[str]:

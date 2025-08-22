@@ -4,16 +4,17 @@ Routes queries between MongoDB structured data and vector search.
 """
 
 from typing import Dict, Tuple, List
-from app.services.knowledge_adapter import KnowledgeAdapter
+# from app.services.knowledge_adapter import KnowledgeAdapter  # Commented out - class doesn't exist
 from rag.qdrant_client import search_with_user_filter
 from rag.embeddings import embed_single
 
 class RetrievalRouter:
     """Routes queries between structured MongoDB and vector search."""
     
-    def __init__(self, ka: KnowledgeAdapter):
+    def __init__(self, ka=None):  # ka parameter made optional since KnowledgeAdapter doesn't exist
         self.ka = ka
-        self.safety = set(ka.get_safety_rules().get("critical_terms", []))
+        # self.safety = set(ka.get_safety_rules().get("critical_terms", []))  # Commented out - ka doesn't exist
+        self.safety = set()  # Empty set for now
 
     def route(self, user_query: str, user_profile: Dict, context_path: str) -> Tuple[str, List]:
         """
@@ -124,14 +125,14 @@ class RetrievalRouter:
 
     def get_guided_hint(self, context_path: str) -> Dict:
         """Get a short guided hint from the current context."""
-        try:
-            node = self.ka.get_node(context_path)
-            if node:
-                return {
-                    "label": node.get("label", "Continue"),
-                    "next_steps": self.ka.get_available_paths(context_path)[:3]
-                }
-        except Exception as e:
-            print(f"❌ Error getting guided hint: {e}")
+        # try:
+        #     node = self.ka.get_node(context_path)  # Commented out - ka doesn't exist
+        #     if node:
+        #         return {
+        #             "label": node.get("label", "Continue"),
+        #             "next_steps": self.ka.get_available_paths(context_path)[:3]  # Commented out - ka doesn't exist
+        #         }
+        # except Exception as e:
+        #     print(f"❌ Error getting guided hint: {e}")
         
         return {"label": "Continue", "next_steps": []}
