@@ -175,3 +175,110 @@ def search_with_diversity(
     except Exception as e:
         print(f"❌ Diversity search error: {e}")
         return []
+
+def ensure_memory_collections(user_id: str):
+    """Ensure all conversation memory collections exist for a user."""
+    collections = [
+        f"chat_history_{user_id}",
+        f"insights_{user_id}", 
+        f"prefs_{user_id}",
+        f"learning_{user_id}"
+    ]
+    
+    for collection in collections:
+        ensure_collection(collection, size=1536)
+    
+    print(f"✅ Ensured memory collections for user: {user_id}")
+    return collections
+
+def store_conversation_memory(user_id: str, memory_type: str, data: Dict):
+    """Store conversation memory in the appropriate collection."""
+    try:
+        from .embeddings import embed_single
+        import uuid
+        from datetime import datetime
+        from qdrant_client.models import PointStruct
+        
+        collection_name = f"{memory_type}_{user_id}"
+        qdr = ensure_collection(collection_name, size=1536)
+        
+        if not qdr:
+            print(f"❌ Failed to ensure collection: {collection_name}")
+            return False
+        
+        # Create content for embedding
+        content = f"{memory_type}: {str(data)}"
+        vector = embed_single(content)
+        
+        if not vector:
+            print(f"❌ Failed to generate embedding for memory")
+            return False
+        
+        # Create point with metadata
+        point = PointStruct(
+            id=uuid.uuid4().hex,
+            vector=vector,
+            payload={
+                "type": memory_type,
+                "user_id": user_id,
+                "content": content,
+                "data": data,
+                "timestamp": datetime.now().isoformat(),
+                "source": "conversation_memory"
+            }
+        )
+        
+        # Insert into Qdrant
+        qdr.upsert(collection_name=collection_name, points=[point])
+        print(f"✅ Stored {memory_type} memory for user: {user_id}")
+        return True
+        
+    except Exception as e:
+        print(f"❌ Error storing conversation memory: {e}")
+        return False
+
+def search_conversation_memory(user_id: str, query: str, memory_type: str = None, limit: int = 5) -> List[Dict]:
+    """Search conversation memory collections for relevant information."""
+    try:
+        from .embeddings import embed_single
+        
+        # Generate query embedding
+        query_vector = embed_single(query)
+        if not query_vector:
+            return []
+        
+        all_results = []
+        
+        # Define which collections to search
+        if memory_type:
+            collections = [f"{memory_type}_{user_id}"]
+        else:
+            # Search all memory collections
+            collections = [
+                f"chat_history_{user_id}",
+                f"insights_{user_id}", 
+                f"prefs_{user_id}",
+                f"learning_{user_id}"
+            ]
+        
+        # Search each collection
+        for collection_name in collections:
+            try:
+                results = search_with_user_filter(
+                    collection_name=collection_name,
+                    query_vector=query_vector,
+                    user_id=user_id,
+                    k=limit
+                )
+                all_results.extend(results)
+            except Exception as e:
+                print(f"⚠️ Error searching collection {collection_name}: {e}")
+                continue
+        
+        # Sort by relevance score and limit results
+        all_results.sort(key=lambda x: x.get("score", 0), reverse=True)
+        return all_results[:limit]
+        
+    except Exception as e:
+        print(f"❌ Error searching conversation memory: {e}")
+        return []

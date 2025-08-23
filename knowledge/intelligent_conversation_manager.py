@@ -11,6 +11,7 @@ from .context_traversal_engine import ContextTraversalEngine
 # Add new imports for dual-index system
 from .knowledge_adapter import KnowledgeAdapter
 from retrieval.retrieval_router import RetrievalRouter
+from .conversation_memory_manager import ConversationMemoryManager
 
 class IntelligentConversationManager:
     def __init__(self, mongo_uri: str = "mongodb://localhost:27017/"):
@@ -41,6 +42,9 @@ class IntelligentConversationManager:
             "recommendations_given": []
         }
         
+        # Initialize memory manager (will be set when user_profile is available)
+        self.memory_manager = None
+        
         # Generate user ID if not exists
         if "user_id" not in self.user_profile:
             self.user_profile["user_id"] = "default"
@@ -49,6 +53,9 @@ class IntelligentConversationManager:
         """Start a new intelligent conversation based on user profile."""
         self.user_profile.update(user_profile)
         self.conversation_history = []
+        
+        # Initialize memory manager for this user
+        self._initialize_memory_manager()
         
         # Use knowledge adapter for initial context
         initial_path = self.knowledge_adapter.get_initial_context(self.user_profile)
@@ -95,6 +102,17 @@ class IntelligentConversationManager:
                 "content": user_input,
                 "timestamp": self._get_timestamp()
             })
+            
+            # Store user message in conversation memory
+            self._store_conversation_memory({
+                "role": "user",
+                "content": user_input,
+                "timestamp": self._get_timestamp()
+            })
+            
+            # Extract insights periodically (every 10 messages)
+            if len(self.conversation_history) % 10 == 0:
+                self._extract_and_store_insights()
             
             # Check for safety terms first
             safety_warning = ""
@@ -170,6 +188,16 @@ class IntelligentConversationManager:
                 "timestamp": self._get_timestamp()
             })
             
+            # Store assistant response in conversation memory
+            self._store_conversation_memory({
+                "role": "assistant",
+                "content": response["response"],
+                "context_path": next_context,
+                "sources": response["sources"],
+                "next_suggestions": response["next_suggestions"],
+                "timestamp": self._get_timestamp()
+            })
+            
             return {
                 "response": response["response"],
                 "context_path": next_context,
@@ -182,18 +210,16 @@ class IntelligentConversationManager:
             
         except Exception as e:
             print(f"❌ Error processing user response: {e}")
-            # Provide a helpful fallback response
-            fallback_response = "I'm having trouble processing that right now. Let me try to help you with some general autism support information. Could you rephrase your question or ask about a specific topic like screening, diagnosis, treatment options, or support resources?"
-            
+            import traceback
+            traceback.print_exc()
             return {
-                "response": fallback_response,
-                "context_path": self.current_context_path or "general",
-                "next_suggestions": ["Ask about screening", "Learn about support resources", "Explore treatment options"],
-                "available_paths": self.available_paths,
-                "confidence": 0.3,
+                "response": "I apologize, but I encountered an error processing your request. Please try again.",
+                "context_path": self.current_context_path,
+                "next_suggestions": [],
+                "available_paths": [],
+                "confidence": 0.0,
                 "sources": [],
-                "mode": "fallback",
-                "error": str(e)
+                "mode": "error"
             }
     
     def _synthesize_blended_response(self, user_input: str, context_path: str, vector_results: List) -> Dict:
@@ -534,6 +560,44 @@ class IntelligentConversationManager:
         """Close all connections."""
         self.response_engine.close()
         self.context_engine.close()
+
+    def _initialize_memory_manager(self):
+        """Initialize the memory manager for the current user."""
+        try:
+            user_id = self.user_profile.get("user_id", "default")
+            self.memory_manager = ConversationMemoryManager(user_id)
+            print(f"✅ Memory manager initialized for user: {user_id}")
+        except Exception as e:
+            print(f"⚠️ Could not initialize memory manager: {e}")
+            self.memory_manager = None
+    
+    def _store_conversation_memory(self, message: Dict):
+        """Store a message in conversation memory if memory manager is available."""
+        if self.memory_manager:
+            try:
+                self.memory_manager.store_chat_message(message)
+            except Exception as e:
+                print(f"⚠️ Error storing conversation memory: {e}")
+    
+    def _extract_and_store_insights(self):
+        """Extract insights from current conversation and store them."""
+        if self.memory_manager and len(self.conversation_history) > 10:
+            try:
+                insights = self.memory_manager.extract_and_store_insights(self.conversation_history)
+                print(f"✅ Extracted and stored conversation insights")
+                return insights
+            except Exception as e:
+                print(f"⚠️ Error extracting insights: {e}")
+        return {}
+    
+    def _get_memory_context(self, query: str) -> Dict:
+        """Get relevant context from conversation memory."""
+        if self.memory_manager:
+            try:
+                return self.memory_manager.retrieve_relevant_context(query)
+            except Exception as e:
+                print(f"⚠️ Error retrieving memory context: {e}")
+        return {}
 
 # Example usage and testing
 if __name__ == "__main__":

@@ -10,11 +10,19 @@ A comprehensive AI-powered support system for families and individuals affected 
 - **📄 Document Upload**: Patient-specific document analysis for personalized guidance
 - **🔍 Smart Routing**: Intelligent query routing between structured knowledge and vector search
 - **🔒 Privacy-First**: User-specific document storage with complete isolation
+- **🧠 Conversation Memory**: Persistent storage of conversation insights and user preferences
 
 ### **Admin Features**
 - **📚 Expert Document Upload**: Admin-only interface for improving general knowledge base
 - **🔐 Access Control**: Password-protected admin interface
 - **📊 Knowledge Management**: Centralized management of expert resources
+
+### **Conversation Memory System**
+- **💾 Persistent Storage**: Chat history and insights stored in user-specific vector collections
+- **🔍 Smart Insights**: Automatic extraction of topics, concerns, strategies, and preferences
+- **📈 Learning Patterns**: Tracks successful strategies and user learning preferences
+- **🔄 Context Continuity**: Maintains conversation context across sessions
+- **⚡ Performance Optimized**: Prevents browser crashes with intelligent history management
 
 ### **Technical Architecture**
 - **🧠 Advanced RAG System**: Multi-source retrieval with patient context integration
@@ -116,6 +124,10 @@ The Autism Support App v2 implements a **comprehensive Retrieval-Augmented Gener
 - **Qdrant Vector Store**: Primary knowledge base with 1536-dimensional embeddings
   - `user_docs_{user_id}`: Private patient documents (diagnosis reports, evaluations, therapy notes)
   - `kb_autism_support`: Shared autism knowledge base (research, guidelines, resources)
+  - `chat_history_{user_id}`: Persistent conversation history storage
+  - `insights_{user_id}`: Extracted conversation insights and patterns
+  - `prefs_{user_id}`: User preferences and learning patterns
+  - `learning_{user_id}`: Successful strategies and recommendations
 - **MongoDB**: Structured conversation flows and guided support paths
 - **Web Integration**: Real-time information retrieval for dynamic context
 - **Patient Documents**: Real-time analysis and context extraction
@@ -128,12 +140,20 @@ The Autism Support App v2 implements a **comprehensive Retrieval-Augmented Gener
 #### **3. Multi-Source Vector Search**
 - **search_with_diversity()**: Ensures multiple source perspectives for comprehensive responses
 - **search_user_documents()**: Patient-specific document retrieval with semantic search
-- **Hybrid Search**: Combines shared knowledge with user-specific documents
+- **search_conversation_memory()**: Retrieves relevant past insights and preferences
+- **Hybrid Search**: Combines shared knowledge with user-specific documents and memory
 
 #### **4. Response Synthesis Engine**
-- **Multi-Source Integration**: Intelligently blends information from 4+ sources
+- **Multi-Source Integration**: Intelligently blends information from 5+ sources
 - **Patient Context Integration**: Automatically extracts and utilizes patient-specific details
+- **Memory Context Integration**: Incorporates past conversation insights for continuity
 - **OpenAI GPT-4**: Advanced language model for empathetic, personalized responses
+
+#### **5. Conversation Memory Manager**
+- **Persistent Storage**: Stores chat messages, insights, and preferences in vector database
+- **Intelligent Extraction**: Automatically identifies topics, concerns, and successful strategies
+- **Context Retrieval**: Semantic search across memory collections for relevant information
+- **Performance Optimization**: Prevents unlimited history growth with smart summarization
 
 ### **File Structure**
 ```
@@ -142,6 +162,7 @@ autism_support_app_v2/
 ├── knowledge/                      # Core RAG orchestration
 │   ├── intelligent_conversation_manager.py  # RAG system orchestrator
 │   ├── response_synthesis_engine.py         # Multi-source response synthesis
+│   ├── conversation_memory_manager.py       # Conversation memory persistence
 │   └── knowledge_adapter.py                 # Conversation flow management
 ├── rag/                           # Vector operations and document processing
 │   ├── qdrant_client.py           # Vector database client with diversity search
@@ -200,13 +221,47 @@ OpenAI GPT-4 Processing:
 ├── Structured Context Input
 ├── Patient-Specific Personalization
 ├── Multi-Source Synthesis
+├── Memory Context Integration
 └── Empathetic Response Generation
 
 Output:
 ├── Personalized Response
 ├── Source Transparency
 ├── Confidence Scoring
+├── Memory Continuity
 └── Next Step Suggestions
+```
+
+### **Conversation Memory Data Flow**
+
+#### **1. Memory Storage Pipeline**
+```
+User Message → IntelligentConversationManager → ConversationMemoryManager
+├── Store in chat_history_{user_id} collection
+├── Extract insights every 10 messages
+├── Store insights in insights_{user_id} collection
+├── Store preferences in prefs_{user_id} collection
+└── Store strategies in learning_{user_id} collection
+```
+
+#### **2. Memory Retrieval Pipeline**
+```
+User Query → Response Synthesis Engine → Memory Context Integration
+├── Semantic search across all memory collections
+├── Retrieve relevant chat history, insights, preferences
+├── Integrate with current conversation context
+├── Provide continuity and avoid repetition
+└── Enhance personalization with past learnings
+```
+
+#### **3. Performance Optimization**
+```
+Chat History Management:
+├── Maximum 25 messages in session
+├── Automatic insight extraction at 10-message intervals
+├── Smart summarization of old conversations
+├── Vector storage of key insights
+└── Prevention of browser crashes
 ```
 
 ### **Patient Context Integration**

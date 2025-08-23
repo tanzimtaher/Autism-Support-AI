@@ -7,12 +7,17 @@ import json
 from pathlib import Path
 from pymongo import MongoClient
 from rag.query_engine import query_index
+from datetime import datetime, timedelta
 
 # Add parent directory to path for imports
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 # Import our intelligent conversation manager
 from knowledge.intelligent_conversation_manager import IntelligentConversationManager
+
+# Add these constants after the imports
+MAX_CHAT_HISTORY = 25
+MAX_HISTORY_TOKENS = 8000
 
 # ---- keys & db
 client = openai.OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
@@ -303,61 +308,177 @@ Tone: {tone}
     ).choices[0].message.content.strip()
 
 def collect_user_profile():
-    """Collect user profile information for intelligent routing."""
-    st.subheader("Let's get started")
+    """Start with true conversational AI that leverages RAG for personalized responses."""
     
-    col1, col2 = st.columns(2)
+    # Check if we have existing documents with patient context
+    user_id = ensure_consistent_user_id()
+    existing_patient_info = parse_patient_documents(user_id)
     
-    with col1:
-        role = st.radio(
-            "I am a:",
-            ["parent_caregiver", "adult_self"],
-            format_func=lambda x: "Parent/Caregiver" if x == "parent_caregiver" else "Adult (Self)"
-        )
-        
-        diagnosis_status = st.radio(
-            "Diagnosis status:",
-            ["diagnosed_no", "diagnosed_yes"],
-            format_func=lambda x: "No diagnosis yet" if x == "diagnosed_no" else "Has autism diagnosis"
-        )
+    # Initialize conversational state
+    if "conversation_started" not in st.session_state:
+        st.session_state.conversation_started = False
+    if "user_profile" not in st.session_state:
+        st.session_state.user_profile = {}
+    if "chat_history" not in st.session_state:
+        st.session_state.chat_history = []
+    if "conversation_stage" not in st.session_state:
+        st.session_state.conversation_stage = "personalized_opening"
     
-    with col2:
-        if role == "parent_caregiver":
-            child_age = st.selectbox(
-                "Child's age:",
-                ["0-3", "3-5", "6-12", "13-17", "18+"]
-            )
-            age_display = child_age
+    # If conversation hasn't started, begin with personalized greeting
+    if not st.session_state.conversation_started:
+        # Create personalized, empathetic opening based on RAG data
+        if existing_patient_info and existing_patient_info.get("name"):
+            # Use specific patient information for personalized response
+            patient_name = existing_patient_info.get("name", "your child")
+            age = existing_patient_info.get("age") or existing_patient_info.get("current_age")
+            diagnosis = existing_patient_info.get("diagnosis", "")
+            concerns = existing_patient_info.get("concerns", [])
+            
+            # Format age properly
+            if age is not None and age != "":
+                age_display = f"{age} years old"
+            else:
+                age_display = "a child"
+            
+            # Create empathetic, personalized opening
+            opening_message = f"Hi there! 👋 I'm so glad you're here. I've been looking through Tucker's information, and I want you to know that I understand this journey can feel overwhelming at times.\n\nI can see that Tucker is {age_display} and has been diagnosed with {diagnosis}. I also noticed some concerns about {', '.join(concerns[:2]) if concerns else 'development and communication'}.\n\nI'm here to walk alongside you and Tucker on this journey. Every child is unique, and Tucker's specific needs and strengths matter. What would you like to focus on today? Are there particular challenges you're facing, or resources you're looking for to support Tucker's development?\n\nJust tell me what's on your mind - I'm here to listen and help."
+            
+            # Pre-populate user profile with RAG data
+            st.session_state.user_profile = {
+                "role": "parent_caregiver",
+                "diagnosis_status": "diagnosed_yes" if diagnosis else "diagnosed_no",
+                "child_age": age,
+                "primary_concern": concerns[0] if concerns else "general",
+                "patient_name": patient_name,
+                "patient_info": existing_patient_info
+            }
         else:
-            child_age = "18+"
-            age_display = "Adult"
+            # Generic but warm opening for new users
+            opening_message = "Hi there! 👋 I'm so glad you're here. I know that seeking support for autism can feel overwhelming, and I want you to know that you're not alone on this journey.\n\nI'm here to listen, understand, and provide personalized guidance. Every family's situation is unique, and I want to understand yours so I can offer the most relevant support.\n\nCould you tell me a bit about your situation? Are you seeking support for yourself or for a child? What brings you here today?\n\nJust share what feels comfortable - I'm here to help."
         
-        st.info(f"Age: {age_display}")
+        # Add opening message to chat history
+        st.session_state.chat_history.append({
+            "role": "assistant",
+            "content": opening_message,
+            "conversation_type": "personalized_opening"
+        })
+        st.session_state.conversation_started = True
     
-    # Additional context for better routing
-    if role == "parent_caregiver" and diagnosis_status == "diagnosed_no":
-        primary_concern = st.selectbox(
-            "Primary concern:",
-            ["developmental_delays", "communication", "social_behavior", "other"],
-            format_func=lambda x: x.replace("_", " ").title()
-        )
-    else:
-        primary_concern = "general"
+    # Display pure chat interface
+    st.markdown("### 💬 Let's talk")
     
-    if st.button("Start Conversation"):
-        # Store in session state
-        st.session_state.user_profile = {
-            "role": role,
-            "diagnosis_status": diagnosis_status,
-            "child_age": child_age,
-            "primary_concern": primary_concern
-        }
+    # Show chat history
+    for message in st.session_state.chat_history:
+        if message["role"] == "assistant":
+            st.markdown(f"**🤖 AI Assistant:** {message['content']}")
+        else:
+            st.markdown(f"**👤 You:** {message['content']}")
+    
+    # Chat input
+    user_input = st.chat_input("Type your message here...")
+    
+    if user_input:
+        # Add user message to chat history
+        add_message_to_history({
+            "role": "user",
+            "content": user_input
+        })
         
-        # Start intelligent conversation
-        start_unified_conversation()
+        # For the first few exchanges, use personalized responses based on Tucker's info
+        print(f"🔍 DEBUG: Current conversation_stage: {st.session_state.get('conversation_stage', 'NOT_SET')}")
+        if st.session_state.conversation_stage == "personalized_opening":
+            print(f"🔍 DEBUG: Using personalized opening mode for message: '{user_input}'")
+            try:
+                print(f"🔍 Processing first message: '{user_input}'")
+                user_id = ensure_consistent_user_id()
+                patient_info = parse_patient_documents(user_id)
+                print(f"🔍 Patient info found: {bool(patient_info)}")
+                
+                # Generate fast personalized response using cached context
+                print(f"🔍 About to call generate_fast_personalized_response")
+                personalized_response = generate_fast_personalized_response(user_input, st.session_state.user_profile)
+                
+                # Check if we need to transition to full RAG mode
+                if personalized_response is None:
+                    print(f"🔍 Complex query detected - transitioning to full RAG mode")
+                    st.session_state.conversation_stage = "main_conversation"
+                    
+                    # Initialize conversation manager without adding default message
+                    if not st.session_state.conversation_id:
+                        start_unified_conversation(add_default_message=False)
+                    
+                    # Process through full RAG system
+                    with st.spinner("🤔 Thinking..."):
+                        try:
+                            user_id = ensure_consistent_user_id()
+                            patient_info = parse_patient_documents(user_id)
+                            enhanced_query = enhance_user_query_with_patient_context(user_input, patient_info)
+                            
+                            # Process enhanced user input through intelligent manager
+                            process_unified_input(enhanced_query)
+                        except Exception as e:
+                            print(f"⚠️ Could not enhance query with patient context: {e}")
+                            # Fallback to original processing
+                            process_unified_input(user_input)
+                    
+                    st.rerun()
+                    return
+                
+                print(f"🔍 Generated response length: {len(personalized_response)}")
+                
+                # Add personalized response to chat history
+                add_message_to_history({
+                    "role": "assistant",
+                    "content": personalized_response,
+                    "conversation_type": "personalized_response"
+                })
+                print(f"🔍 Added response to chat history. Total messages: {len(st.session_state.chat_history)}")
+                
+                # Check if user is ready to move to main conversation
+                if any(word in user_input.lower() for word in ["ready", "start", "begin", "continue", "okay", "yes", "help", "support"]):
+                    st.session_state.conversation_stage = "main_conversation"
+                    # Initialize conversation manager without adding default message
+                    if not st.session_state.conversation_id:
+                        start_unified_conversation(add_default_message=False)
+                
+            except Exception as e:
+                print(f"⚠️ Could not generate personalized response: {e}")
+                import traceback
+                traceback.print_exc()
+                # Fallback to generic response
+                fallback_response = "Thank you for sharing that with me. I want to make sure I understand your situation so I can provide the most helpful support. Could you tell me a bit more about what you're looking for?"
+                st.session_state.chat_history.append({
+                    "role": "assistant",
+                    "content": fallback_response,
+                    "conversation_type": "fallback_response"
+                })
+        else:
+            print(f"🔍 DEBUG: NOT in personalized opening mode. Stage: {st.session_state.get('conversation_stage', 'NOT_SET')}")
+            print(f"🔍 DEBUG: This message will go through intelligent manager instead")
+            
+            # Main conversation mode - use intelligent manager
+            if not st.session_state.conversation_id:
+                start_unified_conversation(add_default_message=False)
+            
+            with st.spinner("🤔 Thinking..."):
+                try:
+                    user_id = ensure_consistent_user_id()
+                    patient_info = parse_patient_documents(user_id)
+                    enhanced_query = enhance_user_query_with_patient_context(user_input, patient_info)
+                    
+                    # Process enhanced user input through intelligent manager
+                    process_unified_input(enhanced_query)
+                except Exception as e:
+                    print(f"⚠️ Could not enhance query with patient context: {e}")
+                    # Fallback to original processing
+                    process_unified_input(user_input)
+        
         st.rerun()
 
-def start_unified_conversation():
+
+
+
+def start_unified_conversation(add_default_message=True):
     """Start the unified intelligent conversation."""
     if not st.session_state.user_profile:
         return
@@ -367,14 +488,16 @@ def start_unified_conversation():
     
     # Initialize conversation state
     st.session_state.conversation_id = start_result["conversation_id"]
+    print(f"✅ Conversation initialized with ID: {st.session_state.conversation_id}")
     
-    # Add initial message to chat history
-    st.session_state.chat_history.append({
-        "role": "assistant",
-        "content": start_result["response"],
-        "context_path": start_result["context_path"],
-        "conversation_type": "guided"  # Start with guided approach
-    })
+    # Only add initial message to chat history if requested
+    if add_default_message:
+        st.session_state.chat_history.append({
+            "role": "assistant",
+            "content": start_result["response"],
+            "context_path": start_result["context_path"],
+            "conversation_type": "guided"  # Start with guided approach
+        })
 
 def show_unified_conversation_interface():
     """Show the unified conversation interface that adapts automatically."""
@@ -404,6 +527,21 @@ def show_unified_conversation_interface():
         # Document management
         st.markdown("---")
         st.markdown("### 📎 Document Management")
+        
+        # Add patient context cache management
+        st.markdown("### 🧠 Patient Context Cache")
+        if st.button("🔄 Refresh Patient Context"):
+            st.session_state.patient_context_cache = None
+            st.session_state.patient_context_timestamp = None
+            st.success("Patient context cache cleared. Will refresh on next interaction.")
+        
+        if st.session_state.patient_context_cache:
+            cache_age = datetime.now() - st.session_state.patient_context_timestamp
+            st.info(f"Cache age: {cache_age.seconds // 60} minutes")
+            if st.session_state.patient_context_cache.get('name'):
+                st.write(f"Patient: {st.session_state.patient_context_cache.get('name')}")
+            if st.session_state.patient_context_cache.get('age'):
+                st.write(f"Age: {st.session_state.patient_context_cache.get('age')} years")
         
         if st.button("📚 View My Documents"):
             show_user_documents()
@@ -542,34 +680,38 @@ def show_unified_conversation_interface():
     user_input = st.chat_input("Type your message here...")
     
     if user_input and user_input.strip():
+        # Store the user input to process
+        current_input = user_input.strip()
+        
         # Add user message to history
-        st.session_state.chat_history.append({
+        add_message_to_history({
             "role": "user",
-            "content": user_input.strip()
+            "content": current_input
         })
         
-        # Show processing indicator
+        # Show processing indicator and process the input
         with st.spinner("🤔 Thinking..."):
             # Enhance query with patient context if available
             try:
                 user_id = ensure_consistent_user_id()
                 patient_info = parse_patient_documents(user_id)
-                enhanced_query = enhance_user_query_with_patient_context(user_input.strip(), patient_info)
+                enhanced_query = enhance_user_query_with_patient_context(current_input, patient_info)
                 
                 # Process enhanced user input through intelligent manager
                 process_unified_input(enhanced_query)
             except Exception as e:
                 print(f"⚠️ Could not enhance query with patient context: {e}")
                 # Fallback to original processing
-                process_unified_input(user_input.strip())
+                process_unified_input(current_input)
         
-        # Rerun to update the display
+        # Rerun to update the display after processing is complete
         st.rerun()
 
 def process_unified_input(user_input):
     """Process user input through the intelligent conversation manager."""
     if not st.session_state.conversation_id:
         st.error("Conversation not initialized. Please start over.")
+        print(f"❌ No conversation_id found. Session state: {st.session_state.get('conversation_id')}")
         return
     
     # Check if we're in screening mode
@@ -585,7 +727,7 @@ def process_unified_input(user_input):
     conversation_type = "guided" if response_result.get("next_suggestions") else "free_form"
     
     # Add response to chat history
-    st.session_state.chat_history.append({
+    add_message_to_history({
         "role": "assistant",
         "content": response_result["response"],
         "context_path": response_result["context_path"],
@@ -601,42 +743,48 @@ def process_unified_input(user_input):
         st.error(response_result["safety_warning"])
 
 def handle_screening_response(user_input):
-    """Handle responses to screening questions."""
-    # Store the user's response
+    """Handle user response to screening questions."""
+    # Store the response
     if "screening_responses" not in st.session_state:
-        st.session_state.screening_responses = []
+        st.session_state.screening_responses = {}
     
-    st.session_state.screening_responses.append(user_input)
+    current_step = st.session_state.current_screening_step
+    current_question = st.session_state.screening_questions[current_step]
+    st.session_state.screening_responses[current_question] = user_input
     
     # Add user response to chat history
     st.session_state.chat_history.append({
         "role": "user",
-        "content": user_input
+        "content": user_input,
+        "conversation_type": "screening_response"
     })
     
-    # Move to next question or provide assessment
+    # Move to next question or complete screening
     st.session_state.current_screening_step += 1
     
-    if st.session_state.current_screening_step < len(st.session_state.screening_questions):
+    if st.session_state.current_screening_step >= len(st.session_state.screening_questions):
+        # Screening complete - generate assessment
+        assessment = generate_screening_assessment(st.session_state.screening_responses)
+        st.session_state.chat_history.append({
+            "role": "assistant",
+            "content": assessment,
+            "conversation_type": "screening_complete",
+            "confidence": 0.8,
+            "sources": []
+        })
+        # Reset screening
+        st.session_state.screening_questions = []
+        st.session_state.current_screening_step = 0
+    else:
         # Ask next question
         next_question = st.session_state.screening_questions[st.session_state.current_screening_step]
         st.session_state.chat_history.append({
             "role": "assistant",
             "content": next_question,
-            "conversation_type": "guided"
+            "conversation_type": "screening_question",
+            "confidence": 1.0,
+            "sources": []
         })
-    else:
-        # Provide assessment based on responses
-        assessment = generate_screening_assessment(st.session_state.screening_responses)
-        st.session_state.chat_history.append({
-            "role": "assistant",
-            "content": assessment,
-            "conversation_type": "guided"
-        })
-        
-        # Clear screening state
-        st.session_state.screening_questions = []
-        st.session_state.current_screening_step = 0
 
 def generate_screening_assessment(responses):
     """Generate assessment based on screening responses."""
@@ -727,6 +875,9 @@ def show_topic_browsing():
                 selected_category = next(opt[1] for opt in category_options if opt[0] == selected_category_label)
                 st.session_state.browse_selections["selected_category"] = selected_category
                 st.rerun()
+            else:
+                # User hasn't selected a category yet, so we can't proceed
+                return
         else:
             selected_category = st.session_state.browse_selections["selected_category"]
             st.info(f"Selected Category: {category_labels.get(selected_category, selected_category.replace('_', ' ').title())}")
@@ -821,7 +972,7 @@ def show_topic_browsing():
                     start_topic_conversation(context_path)
                     st.rerun()
             
-        else:
+        elif category_doc:
             # Get subtopics for regular categories
             subtopics = mongo.find({"context_path": {"$regex": f"^{base_path}\\.{selected_category}"}, "type": "content"})
             subkeys = []
@@ -878,8 +1029,13 @@ def show_topic_browsing():
                     context_path = f"{base_path}.{selected_category}"
                     start_topic_conversation(context_path)
                     st.rerun()
+        else:
+            st.warning("No topics found for this category. The knowledge base may need to be updated.")
     else:
-        st.warning("No topics found for this category. The knowledge base may need to be updated.")
+        st.warning("No categories found for your selection. Please try a different diagnosis status.")
+        if st.button("Reset Selection"):
+            st.session_state.browse_selections = {}
+            st.rerun()
 
 def start_topic_conversation(context_path):
     """Start a guided conversation about a specific topic."""
@@ -1542,7 +1698,7 @@ def test_rag_functionality():
         try:
             from rag.ingest_user_docs import search_user_documents
             from retrieval.retrieval_router import RetrievalRouter
-            from app.services.knowledge_adapter import KnowledgeAdapter
+            from knowledge.knowledge_adapter import KnowledgeAdapter
             
             # Test user document search
             user_results = search_user_documents(user_id, test_query, 3)
@@ -1734,6 +1890,151 @@ if "current_screening_step" not in st.session_state:
     st.session_state.current_screening_step = 0
 if "screening_responses" not in st.session_state:
     st.session_state.screening_responses = []
+# New session state variables for true conversational AI
+if "conversation_started" not in st.session_state:
+    st.session_state.conversation_started = False
+if "conversation_stage" not in st.session_state:
+    st.session_state.conversation_stage = "personalized_opening"
+
+if "chat_onboarding_complete" not in st.session_state:
+    st.session_state.chat_onboarding_complete = False
+if "onboarding_data" not in st.session_state:
+    st.session_state.onboarding_data = {}
+# New session state variables for pure chat onboarding
+if "chat_onboarding_complete" not in st.session_state:
+    st.session_state.chat_onboarding_complete = False
+
+# New session state variables for conversational onboarding
+if "onboarding_step" not in st.session_state:
+    st.session_state.onboarding_step = 0
+if "onboarding_data" not in st.session_state:
+    st.session_state.onboarding_data = {}
+
+# Add these session state variables in the session state section (around line 1850)
+if "patient_context_cache" not in st.session_state:
+    st.session_state.patient_context_cache = None
+if "patient_context_timestamp" not in st.session_state:
+    st.session_state.patient_context_timestamp = None
+if "patient_context_ttl" not in st.session_state:
+    st.session_state.patient_context_ttl = 3600  # 1 hour cache
+
+# Add these functions after the existing functions (around line 450)
+def get_cached_patient_context(user_id, force_refresh=False):
+    """Get patient context with intelligent caching."""
+    current_time = datetime.now()
+    
+    # Check if we have valid cached data
+    if (not force_refresh and 
+        st.session_state.patient_context_cache and 
+        st.session_state.patient_context_timestamp and
+        (current_time - st.session_state.patient_context_timestamp).seconds < st.session_state.patient_context_ttl):
+        
+        print(f"🔍 Using cached patient context (age: {st.session_state.patient_context_cache.get('age', 'NOT_FOUND')})")
+        return st.session_state.patient_context_cache
+    
+    # Extract fresh patient context
+    print(f"🔍 Extracting fresh patient context for user: {user_id}")
+    try:
+        from utils.patient_utils import parse_patient_documents
+        patient_info = parse_patient_documents(user_id)
+        
+        if patient_info and patient_info.get('name') and patient_info.get('age'):
+            # Cache the successful extraction
+            st.session_state.patient_context_cache = patient_info
+            st.session_state.patient_context_timestamp = current_time
+            print(f"✅ Cached patient context: {patient_info.get('name')} ({patient_info.get('age')} years old)")
+            return patient_info
+        else:
+            print(f"⚠️ Patient context extraction failed or incomplete: {patient_info}")
+            return None
+            
+    except Exception as e:
+        print(f"❌ Error extracting patient context: {e}")
+        return None
+
+def generate_fast_personalized_response(user_input, user_profile):
+    """Generate fast personalized response without expensive operations."""
+    user_input_lower = user_input.lower()
+    
+    # Get cached patient context (fast)
+    user_id = ensure_consistent_user_id()
+    patient_info = get_cached_patient_context(user_id)
+    
+    # Simple greeting patterns - these can use fast responses
+    if any(word in user_input_lower for word in ["hi", "hello", "hey", "good morning", "good afternoon", "good evening"]):
+        if patient_info and patient_info.get("name") and patient_info.get("age"):
+            name = patient_info.get("name")
+            age = patient_info.get("age")
+            diagnosis = patient_info.get("diagnosis", "Autism Spectrum Disorder")
+            
+            return f"Hello! 👋 It's wonderful to hear from you. I'm here to support you and {name} on this journey.\n\nBased on what I know about {name}, who is {age} years old with {diagnosis}, I can help you with:\n• Specific strategies for development and communication\n• Resources tailored to {name}'s age and needs\n• Guidance on next steps and support options\n• Answering any questions you have about {name}'s development\n\nWhat would you like to focus on today? You can ask me anything - I'm here to help you and {name} thrive."
+        else:
+            return "Hello! 👋 It's wonderful to hear from you. I'm here to support you and your child on this journey.\n\nI can help you with:\n• Understanding autism and developmental milestones\n• Finding resources and support services\n• Practical strategies for daily challenges\n• Emotional support and guidance\n\nWhat would you like to focus on today? Just tell me what's on your mind - I'm here to help."
+    
+    # Transition keywords - these should move to full RAG mode
+    if any(word in user_input_lower for word in ["ready", "start", "begin", "continue", "okay", "yes"]):
+        return "Perfect! I'm ready to provide you with personalized support. What specific area would you like to explore first?"
+    
+    # Complex queries that need full RAG - return None to trigger RAG mode
+    complex_keywords = [
+        "recommendation", "schooling", "education", "therapy", "treatment", "resources",
+        "help with", "how to", "what should", "advice", "strategy", "plan", "support",
+        "services", "providers", "assessment", "evaluation", "goals", "progress",
+        "challenges", "difficulties", "behavior", "communication", "social", "learning"
+    ]
+    
+    if any(keyword in user_input_lower for keyword in complex_keywords):
+        print(f"🔍 Complex query detected: '{user_input}' - routing to full RAG")
+        return None  # This will trigger full RAG processing
+    
+    # Default empathetic response for simple queries
+    return "Thank you for sharing that with me. I want to make sure I understand your situation so I can provide the most helpful support. Could you tell me a bit more about what you're looking for?"
+
+# Add this function after the existing functions
+def manage_chat_history():
+    """Manage chat history to prevent unlimited growth and extract insights."""
+    try:
+        if len(st.session_state.chat_history) > MAX_CHAT_HISTORY:
+            # Extract insights from old messages before trimming
+            old_messages = st.session_state.chat_history[:-20]
+            
+            # Try to extract insights using memory manager
+            try:
+                user_id = ensure_consistent_user_id()
+                from knowledge.conversation_memory_manager import ConversationMemoryManager
+                memory_manager = ConversationMemoryManager(user_id)
+                insights = memory_manager.extract_and_store_insights(old_messages)
+                
+                if insights:
+                    # Create summary marker
+                    summary_marker = {
+                        "role": "system",
+                        "content": f"Previous conversation insights stored: {len(insights.get('topics_discussed', []))} topics, {len(insights.get('user_concerns', []))} concerns",
+                        "type": "memory_summary",
+                        "timestamp": datetime.now().isoformat()
+                    }
+                    
+                    # Keep only recent messages and add summary
+                    st.session_state.chat_history = [summary_marker] + st.session_state.chat_history[-20:]
+                    print(f"✅ Chat history trimmed to {len(st.session_state.chat_history)} messages, insights extracted")
+                else:
+                    # Simple trim without insights
+                    st.session_state.chat_history = st.session_state.chat_history[-20:]
+                    print(f"✅ Chat history trimmed to {len(st.session_state.chat_history)} messages")
+                    
+            except Exception as e:
+                print(f"⚠️ Could not extract insights, simple trim: {e}")
+                st.session_state.chat_history = st.session_state.chat_history[-20:]
+                
+    except Exception as e:
+        print(f"⚠️ Error managing chat history: {e}")
+
+def add_message_to_history(message):
+    """Add message to chat history with smart management."""
+    st.session_state.chat_history.append(message)
+    
+    # Manage history size
+    manage_chat_history()
 
 # ---- main app
 st.title("Autism Support Assistant")
@@ -1742,6 +2043,13 @@ st.markdown("Hi! I'm here to help guide you through autism support and resources
 # Check if user profile exists, if not collect it
 if not st.session_state.user_profile:
     collect_user_profile()
+elif st.session_state.conversation_stage == "personalized_opening":
+    # Stay in personalized opening mode
+    collect_user_profile()
+elif not st.session_state.conversation_id:
+    # Initialize conversation with intelligent manager without adding default message
+    start_unified_conversation(add_default_message=False)
+    show_unified_conversation_interface()
 else:
     # Show unified conversation interface
     show_unified_conversation_interface()

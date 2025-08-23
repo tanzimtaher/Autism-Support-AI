@@ -339,56 +339,27 @@ class ResponseSynthesisEngine:
         conversation_history: List[Dict] = None,
         vector_results: List[Dict] = None
     ) -> str:
-        """Use LLM to synthesize a comprehensive response."""
-        
-        if not self.openai_client:
-            # Fallback to MongoDB content only
-            return mongodb_content.get("response", "Information not available.")
-        
+        """Synthesize response using OpenAI LLM with comprehensive context."""
         try:
-            # Build context for LLM
+            # Build comprehensive context
             context_parts = []
             
-            # Add MongoDB content
-            if mongodb_content.get("response"):
-                context_parts.append(f"Base Information: {mongodb_content['response']}")
-            
-            # Add vector search results (prioritize user documents)
-            if vector_results:
-                user_doc_results = []
-                general_results = []
-                
-                for result in vector_results:
-                    payload = result.get("payload", {})
-                    if payload.get("source") == "user_upload" or payload.get("type") == "user_document":
-                        user_doc_results.append(result)
-                    else:
-                        general_results.append(result)
-                
-                # Add user documents first (highest priority)
-                if user_doc_results:
-                    context_parts.append("Patient-Specific Documents:")
-                    for i, result in enumerate(user_doc_results[:3], 1):
-                        payload = result.get("payload", {})
-                        filename = payload.get("filename", "Unknown file")
-                        content = payload.get("content", "")[:500]
-                        context_parts.append(f"{i}. {filename}: {content}...")
-                
-                # Add general knowledge results
-                if general_results:
-                    context_parts.append("Additional Knowledge Base:")
-                    for i, result in enumerate(general_results[:3], 1):
-                        payload = result.get("payload", {})
-                        content = payload.get("response", payload.get("content", ""))[:300]
-                        context_parts.append(f"{i}. {content}...")
-            
-            # Add web content
-            for web_item in web_content:
-                context_parts.append(f"Additional Information from {web_item['source']}: {web_item['content'][:500]}...")
+            # Add MongoDB content context
+            if mongodb_content and mongodb_content.get("response"):
+                context_parts.append(f"Structured Guidance:\n{mongodb_content['response']}")
             
             # Add user profile context
-            profile_context = f"User Profile: {user_profile.get('role', 'parent')}, Child Age: {user_profile.get('child_age', 'unknown')}, Diagnosis Status: {user_profile.get('diagnosis_status', 'unknown')}"
-            context_parts.append(profile_context)
+            if user_profile:
+                profile_context = "User Profile:\n"
+                if user_profile.get("role"):
+                    profile_context += f"Role: {user_profile['role']}\n"
+                if user_profile.get("child_age"):
+                    profile_context += f"Child Age: {user_profile['child_age']}\n"
+                if user_profile.get("diagnosis_status"):
+                    profile_context += f"Diagnosis Status: {user_profile['diagnosis_status']}\n"
+                if user_profile.get("concerns"):
+                    profile_context += f"Concerns: {', '.join(user_profile['concerns'])}\n"
+                context_parts.append(profile_context)
             
             # Add conversation history context for continuity
             if conversation_history:
@@ -399,6 +370,29 @@ class ResponseSynthesisEngine:
                     content = msg.get("content", "")[:100] + "..." if len(msg.get("content", "")) > 100 else msg.get("content", "")
                     history_context += f"{role}: {content}\n"
                 context_parts.append(history_context)
+            
+            # NEW: Add conversation memory context if available
+            try:
+                if user_profile and user_profile.get("user_id"):
+                    from knowledge.conversation_memory_manager import ConversationMemoryManager
+                    memory_manager = ConversationMemoryManager(user_profile["user_id"])
+                    memory_context = memory_manager.retrieve_relevant_context(user_query, limit=3)
+                    
+                    if memory_context:
+                        memory_summary = "Relevant Past Insights:\n"
+                        for memory_type, memories in memory_context.items():
+                            if memories:
+                                memory_summary += f"{memory_type.replace('_', ' ').title()}:\n"
+                                for memory in memories[:2]:  # Top 2 memories per type
+                                    content = memory.get("content", "")[:150] + "..." if len(memory.get("content", "")) > 150 else memory.get("content", "")
+                                    memory_summary += f"- {content}\n"
+                                memory_summary += "\n"
+                        
+                        if len(memory_summary.strip()) > 20:  # Only add if we have meaningful content
+                            context_parts.append(memory_summary)
+            except Exception as e:
+                print(f"⚠️ Could not retrieve memory context: {e}")
+                # Continue without memory context
             
             # Add patient document context if available
             try:
@@ -422,74 +416,61 @@ class ResponseSynthesisEngine:
                 print(f"⚠️ Could not add patient context: {e}")
                 # Continue without patient context
             
+            # Add web content context
+            if web_content:
+                web_context = "Additional Web Information:\n"
+                for i, content in enumerate(web_content[:2], 1):  # Limit to 2 web sources
+                    web_context += f"{i}. {content['content'][:200]}...\n"
+                context_parts.append(web_context)
+            
+            # Add vector results context
+            if vector_results:
+                vector_context = "Relevant Document Information:\n"
+                for i, result in enumerate(vector_results[:3], 1):  # Limit to 3 results
+                    payload = result.get("payload", {})
+                    content = payload.get("content", "")[:200] + "..." if len(payload.get("content", "")) > 200 else payload.get("content", "")
+                    source = payload.get("filename", payload.get("source", "Unknown"))
+                    vector_context += f"{i}. {source}: {content}\n"
+                context_parts.append(vector_context)
+            
             # Combine all context
             full_context = "\n\n".join(context_parts)
             
-            # Debug logging
-            print(f"🔍 DEBUG: Context parts count: {len(context_parts)}")
-            print(f"🔍 DEBUG: Full context length: {len(full_context)}")
-            print(f"🔍 DEBUG: Patient info found: {bool(any('Patient Information:' in part for part in context_parts))}")
-            
-            # Create synthesis prompt
-            messages = [
-                {
-                    "role": "system",
-                    "content": """You are an empathetic autism support specialist. Synthesize information from multiple sources to provide comprehensive, personalized responses. 
-                    
-                    CRITICAL: You MUST prioritize and reference specific information from patient documents when available.
-                    If patient documents contain specific details (name, age, diagnosis, concerns), incorporate these naturally into your response.
-                    Do NOT give generic responses when patient-specific information is available.
-                    
-                    Guidelines:
-                    - Be warm, supportive, and understanding
-                    - Personalize responses based on user profile and patient documents
-                    - Combine information from multiple sources seamlessly
-                    - Prioritize patient-specific information from uploaded documents
-                    - Reference specific details from the patient's documents when relevant
-                    - Provide actionable, practical advice
-                    - Use a conversational, caring tone
-                    - Address the specific user query directly"""
-                },
-                {
-                    "role": "user",
-                    "content": f"""User Query: {user_query}
+            # Create system prompt
+            system_prompt = f"""You are an empathetic, knowledgeable autism support assistant. Use the following context to provide personalized, helpful responses:
 
-Available Information:
 {full_context}
 
-IMPORTANT: If patient documents contain specific information, use it to provide a personalized response. Do not give generic advice when patient details are available.
+CRITICAL: You MUST prioritize and reference specific information from patient documents when available. If you have access to conversation memory or past insights, use them to provide continuity and avoid repeating information the user already knows.
 
-Please synthesize a comprehensive, empathetic response that directly addresses the user's question using all available information."""
-                }
-            ]
+Provide responses that are:
+- Personalized to the user's specific situation
+- Based on the context provided
+- Empathetic and supportive
+- Actionable and practical
+- Consistent with previous conversations if memory context is available"""
             
-            # Generate response
-            print(f"🔍 DEBUG: Sending request to OpenAI with {len(messages)} messages")
+            # Create user message
+            user_message = f"User Query: {user_query}\n\nPlease provide a comprehensive, personalized response based on the context above."
+            
+            # Call OpenAI
             response = self.openai_client.chat.completions.create(
                 model="gpt-4o-mini",
-                messages=messages,
-                max_tokens=800,
-                temperature=0.7
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_message}
+                ],
+                temperature=0.7,
+                max_tokens=1000
             )
             
-            result = response.choices[0].message.content
-            print(f"🔍 DEBUG: OpenAI response received, length: {len(result)}")
-            return result
+            return response.choices[0].message.content.strip()
             
         except Exception as e:
-            print(f"❌ LLM synthesis error: {e}")
-            print(f"🔍 DEBUG: Error type: {type(e).__name__}")
-            print(f"🔍 DEBUG: Context parts that failed: {len(context_parts)}")
-            print(f"🔍 DEBUG: MongoDB content available: {bool(mongodb_content)}")
-            
-            # Fallback to MongoDB content with better response
-            base_response = mongodb_content.get("response", "")
-            if base_response:
-                print(f"🔍 DEBUG: Using MongoDB fallback response")
-                return base_response
-            else:
-                print(f"🔍 DEBUG: Using generic fallback response")
-                return "I'm here to help you with autism support. Let me provide some general guidance based on your situation. What specific questions do you have about autism support or resources?"
+            print(f"❌ Error in LLM synthesis: {e}")
+            import traceback
+            traceback.print_exc()
+            return "I apologize, but I encountered an error processing your request. Please try again."
     
     def _get_next_suggestions(self, mongodb_content: Dict, user_profile: Dict) -> List[str]:
         """Generate next step suggestions based on available routes and branches."""

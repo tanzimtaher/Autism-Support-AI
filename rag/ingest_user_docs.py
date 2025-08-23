@@ -334,7 +334,7 @@ def get_user_documents(user_id: str) -> list:
                 "filename": point.payload.get("filename", "Unknown"),
                 "file_type": point.payload.get("file_type", "Unknown"),
                 "upload_timestamp": point.payload.get("upload_timestamp", ""),
-                "content_samples": [point.payload.get("content", "")[:200]],
+                "content_samples": [point.payload.get("content", "")[:200]],  # Keep short for display
                 "chunks": 1,
                 "file_size": len(point.payload.get("content", ""))
             })
@@ -344,6 +344,46 @@ def get_user_documents(user_id: str) -> list:
     except Exception as e:
         print(f"❌ Failed to get user documents: {e}")
         return []
+
+def get_full_document_content(user_id: str) -> str:
+    """
+    Get full document content for LLM processing.
+    
+    Args:
+        user_id: Unique identifier for the user
+        
+    Returns:
+        Full concatenated document content
+    """
+    try:
+        from .qdrant_client import get_qdrant
+        
+        qdr = get_qdrant()
+        if not qdr:
+            return ""
+        
+        collection_name = f"user_docs_{user_id}"
+        
+        # Get all documents for the user with full content
+        results = qdr.scroll(
+            collection_name=collection_name,
+            limit=1000,  # Higher limit for full content
+            with_payload=True
+        )
+        
+        full_content = ""
+        for point in results[0]:
+            if point.payload and "content" in point.payload:
+                filename = point.payload.get("filename", "Unknown")
+                content = point.payload.get("content", "")
+                full_content += f"\n--- Document: {filename} ---\n{content}\n"
+        
+        print(f"✅ Retrieved {len(full_content)} characters of full document content")
+        return full_content
+        
+    except Exception as e:
+        print(f"❌ Failed to get full document content: {e}")
+        return ""
 
 def check_existing_documents(user_id: str) -> dict:
     """
