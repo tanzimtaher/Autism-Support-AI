@@ -316,6 +316,55 @@ python -m rag.ingest_user_docs
 
 # Test admin document processing
 python -m rag.process_admin_docs
+
+# Test conversation memory system
+python -m knowledge.conversation_memory_manager
+```
+
+## 🧠 Conversation Memory System
+
+### **What It Does**
+The conversation memory system transforms your autism support app from a static knowledge base into a **learning companion** that remembers and improves over time.
+
+### **Key Benefits**
+- **🎯 Continuity**: System remembers past conversations and user preferences
+- **📈 Learning**: Tracks successful strategies and what works for each user
+- **🔄 Personalization**: Responses improve over time based on learnings
+- **⚡ Performance**: Prevents browser crashes with smart history management
+- **💾 Persistence**: All insights stored permanently in vector database
+
+### **How It Works**
+1. **Every message** is stored in user-specific vector collections
+2. **Every 10 messages**, the system extracts insights automatically
+3. **Insights include**: Topics discussed, user concerns, successful strategies, preferences
+4. **Memory retrieval**: When you ask questions, the system searches past insights
+5. **Enhanced responses**: Combines current query with relevant past information
+
+### **Memory Collections**
+- **chat_history_{user_id}**: Raw conversation messages
+- **insights_{user_id}**: Extracted topics, concerns, and patterns  
+- **prefs_{user_id}**: User preferences and communication style
+- **learning_{user_id}**: Successful strategies and recommendations
+
+### **Performance Features**
+- **Smart limits**: Maximum 25 messages in session
+- **Automatic trimming**: Old messages summarized, insights preserved
+- **Vector storage**: Efficient semantic search across all memory types
+- **Browser safety**: Prevents crashes from unlimited DOM growth
+
+### **Example Usage**
+```
+User: "My child struggles with social interactions"
+System: [Stores in memory, provides response]
+
+User: "What strategies can help with this?"
+System: [Retrieves past social interaction advice, 
+         combines with current query, 
+         provides personalized response]
+
+User: "That worked really well!"
+System: [Stores successful strategy in learning collection,
+         Will use this information in future responses]
 ```
 
 ## 🔒 Privacy & Security
