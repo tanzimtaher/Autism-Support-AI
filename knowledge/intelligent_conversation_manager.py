@@ -102,7 +102,7 @@ class IntelligentConversationManager:
                 "content": user_input,
                 "timestamp": self._get_timestamp()
             })
-            
+        
             # Store user message in conversation memory
             self._store_conversation_memory({
                 "role": "user",
@@ -118,26 +118,26 @@ class IntelligentConversationManager:
             safety_warning = ""
             if self.retrieval_router:
                 safety_warning = self.retrieval_router.get_safety_warning(user_input)
-            if safety_warning:
-                return {
-                    "response": safety_warning,
-                    "context_path": self.current_context_path,
-                    "next_suggestions": [],
-                    "available_paths": self.available_paths,
-                    "confidence": 1.0,
-                    "sources": [],
-                    "safety_warning": True
-                }
-            
+                if safety_warning:
+                    return {
+                        "response": safety_warning,
+                        "context_path": self.current_context_path,
+                        "next_suggestions": [],
+                        "available_paths": self.available_paths,
+                        "confidence": 1.0,
+                        "sources": [],
+                        "safety_warning": True
+                    }
+        
             # Determine next context path
             if selected_path:
                 next_context = selected_path
             else:
                 next_context = self._determine_next_context(user_input)
-            
+        
             # Update current context
             self.current_context_path = next_context
-            
+        
             # Use retrieval router to decide knowledge source
             mode, vector_results = "vector_only", []
             if self.retrieval_router:
@@ -150,7 +150,7 @@ class IntelligentConversationManager:
                 except Exception as e:
                     print(f"⚠️ Retrieval router failed: {e}")
                     mode, vector_results = "vector_only", []
-            
+        
             # Generate response based on routing mode
             if mode == "mongo_only":
                 # Use only structured MongoDB data
@@ -158,8 +158,8 @@ class IntelligentConversationManager:
                     user_query=user_input,
                     context_path=next_context,
                     user_profile=self.user_profile,
-                    conversation_history=self.conversation_history,
-                    vector_results=[]
+                        conversation_history=self.conversation_history,
+                        vector_results=[]
                 )
             elif mode == "blend":
                 # Combine MongoDB + vector search
@@ -171,10 +171,10 @@ class IntelligentConversationManager:
                 response = self._synthesize_vector_response(
                     user_input, next_context, vector_results
                 )
-            
+        
             # Update available paths
             self.available_paths = self.knowledge_adapter.get_available_paths(next_context)
-            
+                
             # Update conversation memory
             self._update_conversation_memory(user_input, response)
             
@@ -197,7 +197,7 @@ class IntelligentConversationManager:
                 "next_suggestions": response["next_suggestions"],
                 "timestamp": self._get_timestamp()
             })
-            
+        
             return {
                 "response": response["response"],
                 "context_path": next_context,
@@ -207,7 +207,7 @@ class IntelligentConversationManager:
                 "sources": response["sources"],
                 "mode": mode
             }
-            
+        
         except Exception as e:
             print(f"❌ Error processing user response: {e}")
             import traceback

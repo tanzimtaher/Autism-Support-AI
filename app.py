@@ -15,6 +15,12 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 # Import our intelligent conversation manager
 from knowledge.intelligent_conversation_manager import IntelligentConversationManager
 
+# Import our intelligent conversation manager
+from knowledge.intelligent_conversation_manager import IntelligentConversationManager
+
+# Add Google authentication import
+from auth.google_auth import authenticate_user, logout_user, get_user_id
+
 # Add these constants after the imports
 MAX_CHAT_HISTORY = 25
 MAX_HISTORY_TOKENS = 8000
@@ -32,17 +38,28 @@ manager = get_conversation_manager()
 
 def ensure_consistent_user_id():
     """Ensure user ID is consistent across the application."""
-    if not st.session_state.get("user_profile"):
-        return "default"
+    return get_user_id()
+
+def check_authentication():
+    """Check if user is authenticated and show login if not."""
+    if not authenticate_user():
+        return False
     
-    user_id = st.session_state.user_profile.get("user_id", "default")
+    # Show user info and logout button if authenticated
+    if st.session_state.get('authenticated'):
+        user_profile = st.session_state.user_profile
+        col1, col2 = st.columns([4, 1])
+        
+        with col1:
+            st.markdown(f"👋 Welcome, **{user_profile.get('name', 'User')}**")
+            st.markdown(f"📧 {user_profile.get('email', '')}")
+        
+        with col2:
+            if st.button("🚪 Logout"):
+                logout_user()
+                return False
     
-    # If user_id is a random UUID (8 characters), use "default" instead
-    if len(user_id) == 8 and user_id.isalnum():
-        st.session_state.user_profile["user_id"] = "default"
-        return "default"
-    
-    return user_id
+    return True
 
 # ---- helper functions (define these first)
 def show_topic_information_with_rag(context_path):
@@ -343,15 +360,26 @@ def collect_user_profile():
             # Create empathetic, personalized opening
             opening_message = f"Hi there! 👋 I'm so glad you're here. I've been looking through Tucker's information, and I want you to know that I understand this journey can feel overwhelming at times.\n\nI can see that Tucker is {age_display} and has been diagnosed with {diagnosis}. I also noticed some concerns about {', '.join(concerns[:2]) if concerns else 'development and communication'}.\n\nI'm here to walk alongside you and Tucker on this journey. Every child is unique, and Tucker's specific needs and strengths matter. What would you like to focus on today? Are there particular challenges you're facing, or resources you're looking for to support Tucker's development?\n\nJust tell me what's on your mind - I'm here to listen and help."
             
-            # Pre-populate user profile with RAG data
-            st.session_state.user_profile = {
-                "role": "parent_caregiver",
-                "diagnosis_status": "diagnosed_yes" if diagnosis else "diagnosed_no",
-                "child_age": age,
-                "primary_concern": concerns[0] if concerns else "general",
-                "patient_name": patient_name,
-                "patient_info": existing_patient_info
-            }
+            # Pre-populate user profile with RAG data and Google profile
+            if st.session_state.get('authenticated'):
+                google_profile = st.session_state.user_profile
+                st.session_state.user_profile.update({
+                    "user_id": google_profile['user_id'],
+                    "email": google_profile['email'],
+                    "name": google_profile.get('name', ''),
+                    "role": "parent_caregiver",
+                    "diagnosis_status": "diagnosed_yes" if diagnosis else "diagnosed_no",
+                    "child_age": existing_patient_info.get("age") if existing_patient_info else None,
+                    "child_name": existing_patient_info.get("name") if existing_patient_info else None
+                })
+            else:
+                # Fallback for non-authenticated users (shouldn't happen with new flow)
+                st.session_state.user_profile = {
+                    "role": "parent_caregiver",
+                    "diagnosis_status": "diagnosed_yes" if diagnosis else "diagnosed_no",
+                    "child_age": existing_patient_info.get("age") if existing_patient_info else None,
+                    "child_name": existing_patient_info.get("name") if existing_patient_info else None
+                }
         else:
             # Generic but warm opening for new users
             opening_message = "Hi there! 👋 I'm so glad you're here. I know that seeking support for autism can feel overwhelming, and I want you to know that you're not alone on this journey.\n\nI'm here to listen, understand, and provide personalized guidance. Every family's situation is unique, and I want to understand yours so I can offer the most relevant support.\n\nCould you tell me a bit about your situation? Are you seeking support for yourself or for a child? What brings you here today?\n\nJust share what feels comfortable - I'm here to help."
@@ -395,34 +423,57 @@ def collect_user_profile():
                 print(f"🔍 Patient info found: {bool(patient_info)}")
                 
                 # Generate fast personalized response using cached context
-                print(f"🔍 About to call generate_fast_personalized_response")
-                personalized_response = generate_fast_personalized_response(user_input, st.session_state.user_profile)
-                
-                # Check if we need to transition to full RAG mode
-                if personalized_response is None:
-                    print(f"🔍 Complex query detected - transitioning to full RAG mode")
-                    st.session_state.conversation_stage = "main_conversation"
-                    
-                    # Initialize conversation manager without adding default message
-                    if not st.session_state.conversation_id:
-                        start_unified_conversation(add_default_message=False)
-                    
-                    # Process through full RAG system
-                    with st.spinner("🤔 Thinking..."):
-                        try:
-                            user_id = ensure_consistent_user_id()
-                            patient_info = parse_patient_documents(user_id)
-                            enhanced_query = enhance_user_query_with_patient_context(user_input, patient_info)
-                            
-                            # Process enhanced user input through intelligent manager
-                            process_unified_input(enhanced_query)
-                        except Exception as e:
-                            print(f"⚠️ Could not enhance query with patient context: {e}")
-                            # Fallback to original processing
-                            process_unified_input(user_input)
-                    
-                    st.rerun()
-                    return
+                # Always use full RAG system for intelligent responses
+                print(f"🔍 Transitioning to full RAG mode for intelligent response")
+                st.session_state.conversation_stage = "main_conversation"
+
+                # Initialize manager without adding default message
+                if not st.session_state.conversation_id:
+                    start_unified_conversation(add_default_message=False)
+
+                # Process with full RAG system
+                with st.spinner("�� Thinking..."):
+                    try:
+                        user_id = ensure_consistent_user_id()
+                        patient_info = parse_patient_documents(user_id)
+                        enhanced_query = enhance_user_query_with_patient_context(user_input, patient_info)
+                        
+                        # Use the intelligent conversation manager
+                        response = manager.process_user_response(enhanced_query)
+                        
+                        # Extract the actual response text from the response object
+                        if isinstance(response, dict) and 'response' in response:
+                            response_text = response['response']
+                        else:
+                            response_text = str(response)
+
+                        # Add to chat history
+                        add_message_to_history({
+                            "role": "user", 
+                            "content": user_input,
+                            "conversation_type": "user_input"
+                        })
+                        add_message_to_history({
+                            "role": "assistant", 
+                            "content": response_text,
+                            "conversation_type": "rag_response"
+                        })
+                        
+                    except Exception as e:
+                        print(f"❌ Error in RAG processing: {e}")
+                        fallback_response = "I'm here to help you with autism support resources. Let me process your request and provide you with the most relevant information."
+                        add_message_to_history({
+                            "role": "user", 
+                            "content": user_input,
+                            "conversation_type": "user_input"
+                        })
+                        add_message_to_history({
+                            "role": "assistant", 
+                            "content": fallback_response,
+                            "conversation_type": "fallback_response"
+                        })
+
+                st.rerun()
                 
                 print(f"🔍 Generated response length: {len(personalized_response)}")
                 
@@ -647,7 +698,7 @@ def show_unified_conversation_interface():
         st.write("---")
     
     # Document upload section
-    with st.expander("📎 Upload Patient Documents", expanded=False):
+    with st.expander("📎 Upload Patient Documents", expanded=True):
         st.markdown("""
         **Upload patient-specific documents for personalized guidance:**
         - 📄 Medical reports and evaluations
@@ -870,7 +921,7 @@ def show_topic_browsing():
                 options=[opt[0] for opt in category_options],
                 help="Choose the category that best matches your situation"
             )
-            
+        
             if st.button("Select Category"):
                 selected_category = next(opt[1] for opt in category_options if opt[0] == selected_category_label)
                 st.session_state.browse_selections["selected_category"] = selected_category
@@ -896,11 +947,11 @@ def show_topic_browsing():
             
             if "selected_option" not in st.session_state.browse_selections:
                 selected_option_label = st.selectbox(
-                    "Choose an option",
-                    options=[opt[0] for opt in option_labels],
-                    help="Select a specific option for detailed information"
-                )
-                
+                "Choose an option",
+                options=[opt[0] for opt in option_labels],
+                help="Select a specific option for detailed information"
+            )
+            
                 if st.button("Select Option"):
                     selected_option = next(opt[1] for opt in option_labels if opt[0] == selected_option_label)
                     st.session_state.browse_selections["selected_option"] = selected_option
@@ -925,11 +976,11 @@ def show_topic_browsing():
             
             if "selected_route" not in st.session_state.browse_selections:
                 selected_route_label = st.selectbox(
-                    "Choose a route",
-                    options=[opt[0] for opt in route_labels],
-                    help="Select a specific route for detailed information"
-                )
-                
+                "Choose a route",
+                options=[opt[0] for opt in route_labels],
+                help="Select a specific route for detailed information"
+            )
+            
                 if st.button("Select Route"):
                     selected_route = next(opt[1] for opt in route_labels if opt[0] == selected_route_label)
                     st.session_state.browse_selections["selected_route"] = selected_route
@@ -954,11 +1005,11 @@ def show_topic_browsing():
             
             if "selected_branch" not in st.session_state.browse_selections:
                 selected_branch_label = st.selectbox(
-                    "Choose a branch",
-                    options=[opt[0] for opt in branch_labels],
-                    help="Select a specific branch for detailed information"
-                )
-                
+                "Choose a branch",
+                options=[opt[0] for opt in branch_labels],
+                help="Select a specific branch for detailed information"
+            )
+            
                 if st.button("Select Branch"):
                     selected_branch = next(opt[1] for opt in branch_labels if opt[0] == selected_branch_label)
                     st.session_state.browse_selections["selected_branch"] = selected_branch
@@ -1000,14 +1051,17 @@ def show_topic_browsing():
                 
                 if "selected_subtopic" not in st.session_state.browse_selections:
                     selected_subtopic_label = st.selectbox(
-                        "Choose a specific topic (optional)",
-                        subtopic_options,
-                        help="Select a specific subtopic for more detailed information"
-                    )
-                    
+                    "Choose a specific topic (optional)",
+                    subtopic_options,
+                    help="Select a specific subtopic for more detailed information"
+                )
+                
                     if st.button("Select Subtopic"):
                         if selected_subtopic_label != "(none)":
-                            selected_subtopic = next(sub for sub in subkeys if subtopic_labels.get(sub, sub.replace("_", " ").title()) == selected_subtopic_label)
+                            selected_subtopic = next(
+                                sub for sub in subkeys 
+                                if subtopic_labels.get(sub, sub.replace("_", " ").title()) == selected_subtopic_label
+                                )
                             st.session_state.browse_selections["selected_subtopic"] = selected_subtopic
                         else:
                             st.session_state.browse_selections["selected_subtopic"] = None
@@ -2038,6 +2092,11 @@ def add_message_to_history(message):
 
 # ---- main app
 st.title("Autism Support Assistant")
+
+# Check authentication first
+if not check_authentication():
+    st.stop()  # Stop execution if not authenticated
+
 st.markdown("Hi! I'm here to help guide you through autism support and resources. I know this journey can feel overwhelming, and I'm here to listen and help.")
 
 # Check if user profile exists, if not collect it

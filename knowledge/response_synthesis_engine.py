@@ -359,7 +359,7 @@ class ResponseSynthesisEngine:
                     profile_context += f"Diagnosis Status: {user_profile['diagnosis_status']}\n"
                 if user_profile.get("concerns"):
                     profile_context += f"Concerns: {', '.join(user_profile['concerns'])}\n"
-                context_parts.append(profile_context)
+            context_parts.append(profile_context)
             
             # Add conversation history context for continuity
             if conversation_history:
