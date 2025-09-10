@@ -43,42 +43,136 @@ def get_vector_store_documents(user_id: str = "default") -> List[Dict]:
         return []
 
 def parse_patient_documents(user_id: str = "default") -> dict:
-    """Parse patient documents using LLM for comprehensive intelligent information extraction."""
+    """Parse patient documents using LLM; also extract from chat memory and merge."""
     try:
-        # Get full document content for LLM processing
+        # 1) Documents
         from rag.ingest_user_docs import get_full_document_content
-        
         all_content = get_full_document_content(user_id)
-        if not all_content.strip():
+        doc_info = {}
+        if all_content.strip():
+            print(f"🔍 Processing {len(all_content)} characters of document content")
+            print(f"🔍 Document content preview: {all_content[:200]}...")
+            doc_info = extract_patient_info_with_llm(all_content) or {}
+        else:
             print(f"⚠️ No document content found for user: {user_id}")
-            return {}
-        
-        print(f"🔍 Processing {len(all_content)} characters of document content")
-        print(f"🔍 Document content preview: {all_content[:200]}...")
-        
-        # Use LLM to intelligently extract comprehensive patient information
-        patient_info = extract_patient_info_with_llm(all_content)
-        
-        # Calculate current age from DOB if available
+
+        # 2) Conversation memory
+        mem_info = extract_patient_info_from_memory(user_id) or {}
+
+        # 3) Merge (docs preferred, fill with memory; lists are unioned)
+        patient_info = merge_patient_info(doc_info, mem_info)
+
+        # 4) Calculate current age
         if patient_info.get("date_of_birth"):
             current_age = calculate_current_age(patient_info["date_of_birth"])
-            if current_age:
-                patient_info["age"] = current_age
+            if current_age is not None:
+                patient_info["age"] = patient_info.get("age") or current_age
                 patient_info["current_age"] = current_age
-        
-        # Add document metadata
-        patient_info["document_sources"] = [{"user_id": user_id, "content_length": len(all_content)}]
+
+        # 5) Metadata
+        patient_info["document_sources"] = [{"user_id": user_id, "content_length": len(all_content or "")}]
         patient_info["last_updated"] = datetime.now().isoformat()
-        
+
         print(f"✅ Successfully parsed patient documents for {user_id}")
         print(f"🔍 Final patient info: {patient_info}")
         return patient_info
-        
     except Exception as e:
         print(f"❌ Error parsing patient documents: {e}")
-        import traceback
-        traceback.print_exc()
+        import traceback; traceback.print_exc()
         return {}
+
+def extract_patient_info_from_memory(user_id: str) -> dict:
+    """Derive patient info from conversation memory."""
+    try:
+        from rag.qdrant_client import ensure_memory_collections, search_conversation_memory
+        ensure_memory_collections(user_id)
+        results = search_conversation_memory(
+            user_id,
+            query="patient name age diagnosis parents school iep insurance contact address providers services medications recommendations",
+            memory_type="chat_history",
+            limit=30
+        )
+        texts = []
+        for r in results or []:
+            p = r.get("payload", {}) or {}
+            data = p.get("data", {}) or {}
+            c = data.get("content") or ""
+            if c:
+                texts.append(c)
+        if not texts:
+            return {}
+        blob = "\n".join(texts[-15:])
+        return extract_patient_info_with_llm(blob) or {}
+    except Exception as e:
+        print(f"⚠️ Memory extraction failed: {e}")
+        return {}
+
+def merge_patient_info(primary: dict, secondary: dict) -> dict:
+    """Merge two patient info dicts. Prefer 'primary' values, fill gaps from 'secondary'. Combine lists."""
+    if not primary and not secondary:
+        return {}
+    if not primary:
+        return secondary or {}
+    if not secondary:
+        return primary or {}
+
+    merged = dict(primary)  # shallow copy
+
+    def pick(a, b):
+        return a if a not in [None, "", [], {}] else b
+
+    # Scalars / dicts
+    merged["name"] = pick(primary.get("name"), secondary.get("name"))
+    merged["date_of_birth"] = pick(primary.get("date_of_birth"), secondary.get("date_of_birth"))
+    merged["age"] = pick(primary.get("age"), secondary.get("age"))
+    merged["current_age"] = pick(primary.get("current_age"), secondary.get("current_age"))
+    merged["gender"] = pick(primary.get("gender"), secondary.get("gender"))
+    merged["family_structure"] = pick(primary.get("family_structure"), secondary.get("family_structure"))
+    merged["school"] = pick(primary.get("school"), secondary.get("school"))
+    merged["grade_level"] = pick(primary.get("grade_level"), secondary.get("grade_level"))
+    merged["iep_status"] = pick(primary.get("iep_status"), secondary.get("iep_status"))
+    merged["address"] = pick(primary.get("address"), secondary.get("address"))
+    merged["insurance"] = pick(primary.get("insurance"), secondary.get("insurance"))
+    merged["diagnosis"] = pick(primary.get("diagnosis"), secondary.get("diagnosis"))
+
+    # Nested dicts
+    merged["contact_info"] = primary.get("contact_info") or secondary.get("contact_info") or {}
+    merged["parents"] = primary.get("parents") or secondary.get("parents") or {}
+
+    # Lists (union with order preserved)
+    def union_list(a, b):
+        a = a or []
+        b = b or []
+        seen, out = set(), []
+        for item in a + b:
+            key = json.dumps(item, sort_keys=True) if isinstance(item, (dict, list)) else str(item)
+            if key not in seen:
+                seen.add(key)
+                out.append(item)
+        return out
+
+    merged["siblings"] = union_list(primary.get("siblings"), secondary.get("siblings"))
+    merged["educational_needs"] = union_list(primary.get("educational_needs"), secondary.get("educational_needs"))
+    merged["teachers"] = union_list(primary.get("teachers"), secondary.get("teachers"))
+    merged["medications"] = union_list(primary.get("medications"), secondary.get("medications"))
+    merged["providers"] = union_list(primary.get("providers"), secondary.get("providers"))
+    merged["medical_history"] = union_list(primary.get("medical_history"), secondary.get("medical_history"))
+    merged["evaluation_dates"] = union_list(primary.get("evaluation_dates"), secondary.get("evaluation_dates"))
+    merged["key_findings"] = union_list(primary.get("key_findings"), secondary.get("key_findings"))
+    merged["recommendations"] = union_list(primary.get("recommendations"), secondary.get("recommendations"))
+    merged["treatment_goals"] = union_list(primary.get("treatment_goals"), secondary.get("treatment_goals"))
+    merged["progress_areas"] = union_list(primary.get("progress_areas"), secondary.get("progress_areas"))
+    merged["challenges"] = union_list(primary.get("challenges"), secondary.get("challenges"))
+    merged["therapists"] = union_list(primary.get("therapists"), secondary.get("therapists"))
+    merged["services"] = union_list(primary.get("services"), secondary.get("services"))
+    merged["resources"] = union_list(primary.get("resources"), secondary.get("resources"))
+
+    # assessment_scores: prefer primary, deep-merge keys
+    a_scores = primary.get("assessment_scores") or {}
+    b_scores = secondary.get("assessment_scores") or {}
+    merged["assessment_scores"] = {**b_scores, **a_scores}
+
+    return merged
 
 def extract_patient_info_with_llm(document_content: str) -> dict:
     """Use LLM to intelligently extract comprehensive patient information from documents."""
@@ -97,55 +191,59 @@ def extract_patient_info_with_llm(document_content: str) -> dict:
         print(f"🔍 Sending {len(document_content)} characters to LLM for patient info extraction")
         
         # Create a comprehensive prompt for LLM extraction
-        prompt = f"""You are a medical document analysis expert. Extract comprehensive patient information from the following medical documents.
+        schema = r"""
+        {
+            "name": "Full patient name",
+            "date_of_birth": "MM/DD/YYYY format if found",
+            "age": null,
+            "gender": "Male/Female/Other if mentioned",
+            "parents": {
+                "mother": "Mother's name if mentioned",
+                "father": "Father's name if mentioned",
+                "guardians": ["list", "of", "other", "guardians"]
+            },
+            "siblings": ["list", "of", "siblings", "if", "mentioned"],
+            "family_structure": "Description of family structure if mentioned",
+            "school": "School name if mentioned",
+            "grade_level": "Grade or educational level",
+            "iep_status": "IEP status if mentioned",
+            "educational_needs": ["list", "of", "educational", "needs"],
+            "teachers": ["list", "of", "teachers", "or", "educators"],
+            "address": "Address if mentioned",
+            "insurance": "Insurance information if mentioned",
+            "contact_info": {
+                "phone": "Phone number if mentioned",
+                "email": "Email if mentioned"
+            },
+            "diagnosis": "Primary diagnosis",
+            "medications": ["list", "of", "medications"],
+            "providers": ["list", "of", "healthcare", "providers"],
+            "medical_history": ["list", "of", "relevant", "medical", "history"],
+            "evaluation_dates": ["list", "of", "evaluation", "dates"],
+            "assessment_scores": {
+                "Mullen Scales of Early Learning": null,
+                "ADOS-2": null,
+                "CSBS": null
+            },
+            "key_findings": ["list", "of", "key", "clinical", "findings"],
+            "recommendations": ["list", "of", "recommendations"],
+            "treatment_goals": ["list", "of", "treatment", "goals"],
+            "progress_areas": ["list", "of", "areas", "showing", "progress"],
+            "challenges": ["list", "of", "current", "challenges"],
+            "therapists": ["list", "of", "therapists", "or", "specialists"],
+            "services": ["list", "of", "services", "or", "interventions"],
+            "resources": ["list", "of", "recommended", "resources"]
+        }
+        """.strip()
 
-Please extract and return ONLY a valid JSON object with the following structure (include all fields, use null for missing information):
-
-{{
-    "name": "Full patient name",
-    "date_of_birth": "MM/DD/YYYY format if found",
-    "age": null,
-    "gender": "Male/Female/Other if mentioned",
-    "parents": {{
-        "mother": "Mother's name if mentioned",
-        "father": "Father's name if mentioned",
-        "guardians": ["list", "of", "other", "guardians"]
-    }},
-    "siblings": ["list", "of", "siblings", "if", "mentioned"],
-    "family_structure": "Description of family structure if mentioned",
-    "school": "School name if mentioned",
-    "grade_level": "Grade or educational level",
-    "iep_status": "IEP status if mentioned",
-    "educational_needs": ["list", "of", "educational", "needs"],
-    "teachers": ["list", "of", "teachers", "or", "educators"],
-    "address": "Address if mentioned",
-    "insurance": "Insurance information if mentioned",
-    "contact_info": {{
-        "phone": "Phone number if mentioned",
-        "email": "Email if mentioned"
-    }},
-    "diagnosis": "Primary diagnosis",
-    "medications": ["list", "of", "medications"],
-    "providers": ["list", "of", "healthcare", "providers"],
-    "medical_history": ["list", "of", "relevant", "medical", "history"],
-    "evaluation_dates": ["list", "of", "evaluation", "dates"],
-    "assessment_scores": {{
-        "test_name": "score or result"
-    }},
-    "key_findings": ["list", "of", "key", "clinical", "findings"],
-    "recommendations": ["list", "of", "recommendations"],
-    "treatment_goals": ["list", "of", "treatment", "goals"],
-    "progress_areas": ["list", "of", "areas", "showing", "progress"],
-    "challenges": ["list", "of", "current", "challenges"],
-    "therapists": ["list", "of", "therapists", "or", "specialists"],
-    "services": ["list", "of", "services", "or", "interventions"],
-    "resources": ["list", "of", "recommended", "resources"]
-}}
-
-Document content:
-{document_content[:6000]}
-
-Return ONLY the JSON object, no other text or explanation."""
+        prompt = (
+            "You are a medical document analysis expert. Extract comprehensive patient information from the following medical documents.\n\n"
+            "Please extract and return ONLY a valid JSON object with the following structure (include all fields, use null for missing information):\n\n"
+            f"{schema}\n\n"
+            "Document content:\n"
+            f"{document_content[:6000]}\n\n"
+            "Return ONLY the JSON object, no other text or explanation."
+        )
 
         response = client.chat.completions.create(
             model="gpt-4o-mini",
@@ -158,13 +256,30 @@ Return ONLY the JSON object, no other text or explanation."""
         )
         
         # Parse the JSON response
+        content = response.choices[0].message.content or ""
+        # Strip code fences if present
+        if "```json" in content:
+            content = content.split("```json", 1)[1].split("```", 1)[0]
+        elif "```" in content:
+            content = content.split("```", 1)[1].split("```", 1)[0]
+
         try:
-            extracted_info = json.loads(response.choices[0].message.content.strip())
+            extracted_info = json.loads(content.strip())
             print(f"✅ LLM extracted comprehensive patient information: {extracted_info.get('name', 'NO_NAME')} ({extracted_info.get('age', 'NO_AGE')})")
             return extracted_info
-        except json.JSONDecodeError as e:
-            print(f"❌ Failed to parse LLM response as JSON: {e}")
-            print(f"Raw response: {response.choices[0].message.content[:500]}...")
+        except json.JSONDecodeError:
+            # Fallback: pull first JSON object
+            import re
+            m = re.search(r"\{[\s\S]*\}", content)
+            if m:
+                try:
+                    extracted_info = json.loads(m.group(0))
+                    print(f"✅ LLM extracted patient info after cleanup: {extracted_info.get('name', 'NO_NAME')}")
+                    return extracted_info
+                except Exception as e:
+                    print(f"❌ Cleanup JSON parse failed: {e}")
+            print("❌ Failed to parse LLM response as JSON")
+            print(f"Raw response: {content[:500]}...")
             return {}
         
     except Exception as e:

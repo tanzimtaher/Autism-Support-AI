@@ -8,6 +8,7 @@ from pathlib import Path
 from pymongo import MongoClient
 from rag.query_engine import query_index
 from datetime import datetime, timedelta
+from utils.patient_utils import parse_patient_documents as parse_patient_docs_llm
 
 # Add parent directory to path for imports
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
@@ -48,6 +49,8 @@ def check_authentication():
     # Show user info and logout button if authenticated
     if st.session_state.get('authenticated'):
         user_profile = st.session_state.user_profile
+        if "chat_history" not in st.session_state or not st.session_state.chat_history:
+            load_previous_chat_history(user_profile["user_id"], limit=25)
         col1, col2 = st.columns([4, 1])
         
         with col1:
@@ -62,6 +65,34 @@ def check_authentication():
     return True
 
 # ---- helper functions (define these first)
+def load_previous_chat_history(user_id: str, limit: int = 25):
+    try:
+        from rag.qdrant_client import search_conversation_memory, ensure_memory_collections
+        ensure_memory_collections(user_id)
+
+        results = search_conversation_memory(
+            user_id,
+            query="recent conversation context",
+            memory_type="chat_history",
+            limit=limit
+        )
+
+        messages = []
+        for r in results or []:
+            p = r.get("payload", {}) or {}
+            data = p.get("data", {}) or {}
+            role = data.get("role", "assistant")
+            content = data.get("content") or ""
+            ts = p.get("timestamp", "")
+            if content:
+                messages.append({"role": role, "content": content, "timestamp": ts})
+
+        messages.sort(key=lambda x: x.get("timestamp", ""))
+        st.session_state.chat_history = [{"role": m["role"], "content": m["content"]} for m in messages]
+        print(f"✅ Loaded {len(st.session_state.chat_history)} previous messages")
+    except Exception as e:
+        print(f"⚠️ Could not load previous chat history: {e}")
+
 def show_topic_information_with_rag(context_path):
     """Show information about the selected topic with RAG integration."""
     st.subheader("📘 Topic Information")
@@ -526,10 +557,16 @@ def collect_user_profile():
         
         st.rerun()
 
-
-
-
 def start_unified_conversation(add_default_message=True):
+    # Ensure chat history is hydrated for display
+    if ("chat_history" not in st.session_state or not st.session_state.chat_history) and st.session_state.get("authenticated"):
+        try:
+            from auth.google_auth import get_user_id
+            user_id = get_user_id()
+            load_previous_chat_history(user_id, limit=25)
+        except Exception as e:
+            print(f"⚠️ Hydration failed in UI: {e}")
+
     """Start the unified intelligent conversation."""
     if not st.session_state.user_profile:
         return
@@ -552,7 +589,15 @@ def start_unified_conversation(add_default_message=True):
 
 def show_unified_conversation_interface():
     """Show the unified conversation interface that adapts automatically."""
-    
+    # Ensure chat history is hydrated for display
+    if ("chat_history" not in st.session_state or not st.session_state.chat_history) and st.session_state.get("authenticated"):
+        try:
+            from auth.google_auth import get_user_id
+            user_id = get_user_id()
+            load_previous_chat_history(user_id, limit=25)
+        except Exception as e:
+            print(f"⚠️ Hydration failed in UI: {e}")
+
     # Check if we're in browse mode
     if st.session_state.get("browse_mode", False):
         show_topic_browsing()
@@ -572,8 +617,8 @@ def show_unified_conversation_interface():
             st.session_state.current_screening_step = 0
             st.rerun()
         
-        if st.button("📋 View Conversation Summary"):
-            show_conversation_summary()
+        if st.button("📋 View Patient Summary"):
+            show_patient_summary()
         
         # Document management
         st.markdown("---")
@@ -754,6 +799,10 @@ def show_unified_conversation_interface():
                 print(f"⚠️ Could not enhance query with patient context: {e}")
                 # Fallback to original processing
                 process_unified_input(current_input)
+
+        if st.session_state.get("conversation_stage") == "main_conversation":
+            st.markdown("---")
+            show_patient_summary()
         
         # Rerun to update the display after processing is complete
         st.rerun()
@@ -1185,6 +1234,61 @@ def export_conversation(summary):
     # Show a preview of what's being exported
     with st.expander("�� Export Preview"):
         st.json(export_data)
+
+def show_patient_summary():
+    """Show a patient-centric summary extracted from documents."""
+    try:
+        user_id = ensure_consistent_user_id()
+        patient_info = parse_patient_documents(user_id)
+        st.subheader("📋 Patient Summary")
+
+        if not patient_info:
+            st.warning("No patient information found yet. Upload documents to extract patient details.")
+            return
+
+        col1, col2 = st.columns(2)
+        with col1:
+            st.markdown("**Identity & Contacts**")
+            st.write(f"• Name: {patient_info.get('name') or 'Not specified'}")
+            st.write(f"• DOB: {patient_info.get('date_of_birth') or 'Not specified'}")
+            age = patient_info.get('current_age') or patient_info.get('age')
+            st.write(f"• Age: {age if age is not None else 'Not specified'}")
+            st.write(f"• Gender: {patient_info.get('gender') or 'Not specified'}")
+            addr = patient_info.get('address') or 'Not specified'
+            st.write(f"• Address: {addr}")
+            contact = patient_info.get('contact_info', {})
+            st.write(f"• Phone: {contact.get('phone') or 'Not specified'}")
+            st.write(f"• Email: {contact.get('email') or 'Not specified'}")
+
+        with col2:
+            st.markdown("**Education & Care**")
+            st.write(f"• School: {patient_info.get('school') or 'Not specified'}")
+            st.write(f"• Grade: {patient_info.get('grade_level') or 'Not specified'}")
+            st.write(f"• IEP Status: {patient_info.get('iep_status') or 'Not specified'}")
+            st.write(f"• Diagnosis: {patient_info.get('diagnosis') or 'Not specified'}")
+            st.write(f"• Insurance: {patient_info.get('insurance') or 'Not specified'}")
+
+        st.markdown("**Providers & Services**")
+        prov = patient_info.get('providers') or []
+        st.write("• Providers: " + (", ".join(prov) if prov else "Not specified"))
+        services = patient_info.get('services') or []
+        st.write("• Services: " + (", ".join(services) if services else "Not specified"))
+
+        st.markdown("**Clinical Insights**")
+        kf = patient_info.get('key_findings') or []
+        recs = patient_info.get('recommendations') or []
+        ch = patient_info.get('challenges') or []
+        meds = patient_info.get('medications') or []
+        st.write("• Key Findings: " + (", ".join(kf) if kf else "Not specified"))
+        st.write("• Recommendations: " + (", ".join(recs) if recs else "Not specified"))
+        st.write("• Challenges: " + (", ".join(ch) if ch else "Not specified"))
+        st.write("• Medications: " + (", ".join(meds) if meds else "Not specified"))
+
+        # Optional raw data for audit
+        with st.expander("🔍 Raw Patient Data"):
+            st.json(patient_info)
+    except Exception as e:
+        st.warning(f"Could not show patient summary: {e}")
 
 def process_patient_document(uploaded_file):
     """Process and store a patient document."""
@@ -1784,87 +1888,8 @@ def test_rag_functionality():
             import traceback
             st.code(traceback.format_exc())
 
-
 def parse_patient_documents(user_id: str = "default") -> dict:
-    """Parse patient documents to extract key information."""
-    try:
-        vector_docs = get_vector_store_documents(user_id)
-        if not vector_docs:
-            return {}
-        
-        patient_info = {
-            "name": None,
-            "age": None,
-            "diagnosis": None,
-            "concerns": [],
-            "evaluation_date": None,
-            "key_findings": [],
-            "recommendations": []
-        }
-        
-        # Extract information from each document
-        for doc in vector_docs:
-            filename = doc.get("filename", "").lower()
-            
-            # Look for diagnosis/evaluation documents
-            if any(keyword in filename for keyword in ["diagnosis", "evaluation", "assessment", "report"]):
-                # Extract key information from content samples
-                for sample in doc.get("content_samples", []):
-                    content = sample.lower()
-                    
-                    # Extract name
-                    if not patient_info["name"]:
-                        name_patterns = [
-                            r"patient name[:\s]+([a-zA-Z\s]+)",
-                            r"name[:\s]+([a-zA-Z\s]+)",
-                            r"([a-zA-Z]+)\s+[a-zA-Z]+\s+[a-zA-Z]+"  # First Middle Last pattern
-                        ]
-                        for pattern in name_patterns:
-                            import re
-                            match = re.search(pattern, content)
-                            if match:
-                                patient_info["name"] = match.group(1).strip().title()
-                                break
-                    
-                    # Extract age
-                    if not patient_info["age"]:
-                        age_patterns = [
-                            r"(\d+)\s*(?:year|yr)s?\s*old",
-                            r"age[:\s]+(\d+)",
-                            r"(\d+)\s*(?:years?|yrs?)"
-                        ]
-                        for pattern in age_patterns:
-                            match = re.search(pattern, content)
-                            if match:
-                                patient_info["age"] = int(match.group(1))
-                                break
-                    
-                    # Extract diagnosis
-                    if not patient_info["diagnosis"]:
-                        if "autism" in content or "asd" in content:
-                            patient_info["diagnosis"] = "Autism Spectrum Disorder"
-                        elif "diagnosis" in content:
-                            # Look for diagnosis section
-                            diagnosis_section = content.split("diagnosis")[-1][:500]
-                            patient_info["diagnosis"] = diagnosis_section.strip()
-                    
-                    # Extract concerns
-                    concern_keywords = ["concern", "difficulty", "challenge", "issue", "problem"]
-                    for keyword in concern_keywords:
-                        if keyword in content and keyword not in patient_info["concerns"]:
-                            patient_info["concerns"].append(keyword)
-                    
-                    # Extract key findings
-                    if "finding" in content or "result" in content:
-                        findings_section = content.split("finding")[-1][:300]
-                        if findings_section.strip():
-                            patient_info["key_findings"].append(findings_section.strip())
-        
-        return patient_info
-        
-    except Exception as e:
-        print(f"❌ Error parsing patient documents: {e}")
-        return {}
+    return parse_patient_docs_llm(user_id)
 
 def create_patient_summary(patient_info: dict) -> str:
     """Create a human-readable summary of patient information."""
@@ -2097,18 +2122,11 @@ st.title("Autism Support Assistant")
 if not check_authentication():
     st.stop()  # Stop execution if not authenticated
 
+# Always initialize a conversation and render the unified UI after auth
+if not st.session_state.get("conversation_id"):
+    start_unified_conversation(add_default_message=False)
+
 st.markdown("Hi! I'm here to help guide you through autism support and resources. I know this journey can feel overwhelming, and I'm here to listen and help.")
 
-# Check if user profile exists, if not collect it
-if not st.session_state.user_profile:
-    collect_user_profile()
-elif st.session_state.conversation_stage == "personalized_opening":
-    # Stay in personalized opening mode
-    collect_user_profile()
-elif not st.session_state.conversation_id:
-    # Initialize conversation with intelligent manager without adding default message
-    start_unified_conversation(add_default_message=False)
-    show_unified_conversation_interface()
-else:
-    # Show unified conversation interface
-    show_unified_conversation_interface()
+# Render unified conversation UI unconditionally
+show_unified_conversation_interface()
